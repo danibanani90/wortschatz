@@ -547,16 +547,6 @@ async function fetchStatsMap(cfg) {
   return (await apiList([cfg.statsCollection]))[cfg.statsCollection] || {};
 }
 
-function chapterMastery(statsMap, chapterIdx) {
-  let correct = 0, wrong = 0;
-  for (const wid in statsMap) {
-    const s = statsMap[wid];
-    if (s && s.chapterIdx === chapterIdx) { correct += s.correct || 0; wrong += s.wrong || 0; }
-  }
-  const total = correct + wrong;
-  if (total === 0) return null;
-  return Math.round((100 * correct) / total);
-}
 
 // Baut einen gewichteten Wortpool aus den Kapiteln [0, upTo) eines Buches.
 // src: { chapters, statsCollection, statsMap, bookLabel (nur bei Vorgängerbuch) }
@@ -680,22 +670,32 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
   window.scrollTo(0, 0);
 }
 
+// Wie sicher sind die Wörter? Jedes Wort zählt gleich viel, nie geübte Wörter zählen als 0 %.
+function wordsMastery(words, statsMap) {
+  let sum = 0, practiced = 0;
+  words.forEach(w => {
+    const s = statsMap[w.wid];
+    const n = s ? (s.correct || 0) + (s.wrong || 0) : 0;
+    if (n > 0) { practiced++; sum += (s.correct || 0) / n; }
+  });
+  if (!practiced) return null;
+  return { pct: Math.round((100 * sum) / words.length), practiced, total: words.length };
+}
+function masteryLabel(m, suffix) {
+  return m.pct + '% sicher' + (suffix || '') + (m.practiced < m.total ? ' · ' + m.practiced + ' von ' + m.total + ' Wörtern geübt' : '');
+}
+function paintMastery(fill, label, m, suffix) {
+  if (!m) { label.textContent = 'Noch nicht geübt'; fill.style.width = '0%'; return; }
+  fill.style.width = m.pct + '%';
+  fill.style.background = m.pct >= 80 ? 'var(--good)' : m.pct >= 50 ? 'var(--warn)' : 'var(--bad)';
+  label.textContent = masteryLabel(m, suffix);
+}
+
 function topLevelCount(cfg) {
   if (!cfg.chapters.some(c => c.group)) return cfg.chapters.length;
   return new Set(cfg.chapters.map(c => c.group)).size;
 }
 
-function overallMastery(statsMap) {
-  let correct = 0, wrong = 0;
-  for (const wid in statsMap) {
-    const s = statsMap[wid];
-    correct += (s.correct || 0);
-    wrong += (s.wrong || 0);
-  }
-  const total = correct + wrong;
-  if (total === 0) return null;
-  return Math.round((100 * correct) / total);
-}
 
 function chapterCard(c, idx) {
   return el('button', { class: 'chapter-card', id: 'chcard-' + idx, onclick: () => renderChapter(idx) }, [
@@ -814,11 +814,7 @@ async function renderBookSelect() {
     const fill = document.getElementById('bfill-' + idx);
     const label = document.getElementById('blabel-' + idx);
     if (!fill || !label) continue;
-    const pct = overallMastery(statsMap);
-    if (pct == null) { label.textContent = 'Noch nicht geübt'; continue; }
-    fill.style.width = pct + '%';
-    fill.style.background = pct >= 80 ? 'var(--good)' : pct >= 50 ? 'var(--warn)' : 'var(--bad)';
-    label.textContent = pct + '% sicher (gesamt)';
+    paintMastery(fill, label, wordsMastery(b.chapters.flatMap(c => c.words), statsMap), ' (gesamt)');
   }
 }
 
@@ -863,11 +859,7 @@ async function renderHome() {
     const fill = document.getElementById('mfill-' + idx);
     const label = document.getElementById('mlabel-' + idx);
     if (!fill || !label) return;
-    const pct = chapterMastery(statsMap, idx);
-    if (pct == null) { label.textContent = 'Noch nicht geübt'; return; }
-    fill.style.width = pct + '%';
-    fill.style.background = pct >= 80 ? 'var(--good)' : pct >= 50 ? 'var(--warn)' : 'var(--bad)';
-    label.textContent = pct + '% sicher';
+    paintMastery(fill, label, wordsMastery(c.words, statsMap));
   });
 }
 
