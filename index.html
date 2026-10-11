@@ -743,6 +743,8 @@ function renderLanguageSelect() {
     el('div', { class: 'greeting' }, timeGreeting() + ', ' + NEPHEW_NICK + '! 🏊'),
     el('div', { class: 'sub' }, 'Welche Sprache möchtest du heute üben?'),
   ]));
+  const rc0 = resumeCard();
+  if (rc0) app.appendChild(rc0);
 
   const grid = el('div', { class: 'grid' });
   Object.values(LANGS).forEach(cfg => {
@@ -830,6 +832,8 @@ async function renderHome() {
     el('div', { class: 'greeting' }, timeGreeting() + ', ' + NEPHEW_NICK + '! 🏊'),
     el('div', { class: 'sub' }, 'Wähle ein Kapitel und leg los. Alte Vokabeln kommen bei der Abfrage automatisch immer wieder mit dran, gemischt in beide Richtungen (' + cfg.label + ' → Deutsch und Deutsch → ' + cfg.label + ').'),
   ]));
+  const rc1 = resumeCard();
+  if (rc1) app.appendChild(rc1);
 
   if (cfg.bookLabel) {
     app.appendChild(el('div', { class: 'toolbar', style: 'margin-bottom:-6px;' }, [
@@ -930,12 +934,72 @@ async function startQuiz(chapterIdx) {
   runAttempt(session);
 }
 
+// ---------- ANGEFANGENE ABFRAGE MERKEN (auf diesem Gerät) ----------
+const RESUME_KEY = 'wortschatz.activeQuiz.v1';
+const RESUME_MAX_AGE = 7 * 24 * 3600 * 1000;
+function saveProgress(phase, session, extra) {
+  try {
+    const data = { v: 1, savedAt: Date.now(), phase,
+      session: Object.assign({}, session, { extraStillNeeded: Array.from(session.extraStillNeeded) }),
+      extra: extra || null };
+    localStorage.setItem(RESUME_KEY, JSON.stringify(data));
+  } catch (e) { /* z. B. privater Modus: dann eben ohne Merken */ }
+}
+function loadProgress() {
+  try {
+    const raw = localStorage.getItem(RESUME_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || d.v !== 1 || !d.session || !LANGS[d.session.lang] || Date.now() - d.savedAt > RESUME_MAX_AGE) { clearProgress(); return null; }
+    d.session.extraStillNeeded = new Set(d.session.extraStillNeeded || []);
+    return d;
+  } catch (e) { return null; }
+}
+function clearProgress() { try { localStorage.removeItem(RESUME_KEY); } catch (e) { /* egal */ } }
+function resumeProgress(d) {
+  const s = d.session;
+  currentLang = s.lang;
+  currentBook = s.bookIdx == null ? null : s.bookIdx;
+  if (d.phase === 'quiz') {
+    const a = d.extra;
+    // Eine schon beantwortete, aber noch nicht weitergeklickte Frage überspringen
+    while (a.pos < a.order.length && a.correctThisAttempt[a.order[a.pos].wid] !== undefined) a.pos++;
+    if (a.pos >= a.order.length) return finishAttempt(s, a);
+    renderQuizQuestion(s, a);
+  } else if (d.phase === 'result') {
+    renderAttemptResult(s, d.extra);
+  } else if (d.phase === 'submit') {
+    sendSubmission(cfgFor(s.lang, s.bookIdx), s, d.extra.classified, d.extra.payload);
+  }
+}
+function resumeCard() {
+  const d = loadProgress();
+  if (!d) return null;
+  const s = d.session;
+  const cfg = cfgFor(s.lang, s.bookIdx);
+  let where;
+  let nextPos = d.phase === 'quiz' ? d.extra.pos : 0;
+  if (d.phase === 'quiz') while (nextPos < d.extra.order.length && d.extra.correctThisAttempt[d.extra.order[nextPos].wid] !== undefined) nextPos++;
+  if (d.phase === 'quiz') where = 'Frage ' + Math.min(nextPos + 1, d.extra.order.length) + ' von ' + d.extra.order.length + ' · Versuch ' + s.attempt + ' von ' + s.maxAttempts;
+  else if (d.phase === 'result') where = 'Versuch ' + s.attempt + ' ist fertig – noch nicht eingereicht';
+  else where = 'Fertig – muss nur noch eingereicht werden';
+  const buttons = [el('button', { class: 'primary', onclick: () => resumeProgress(d) }, d.phase === 'submit' ? 'Jetzt einreichen' : 'Weitermachen')];
+  if (d.phase !== 'submit') buttons.push(el('button', { onclick: (ev) => { clearProgress(); const c = ev.target.closest('.card'); if (c) c.remove(); } }, 'Verwerfen'));
+  return el('div', { class: 'card', style: 'border:2px solid var(--accent);display:flex;flex-direction:column;gap:8px;' }, [
+    el('div', { class: 'section-title' }, '📌 Angefangene Abfrage'),
+    el('div', { style: 'font-weight:600;font-size:16px;' }, cfg.flag + ' ' + (cfg.bookLabel || cfg.label) + ' · ' + s.chapterTitle),
+    el('div', { style: 'color:var(--ink-soft);font-size:14px;' }, where),
+    el('div', { class: 'toolbar' }, buttons),
+  ]);
+}
+
 function runAttempt(session) {
   const queueWords = session.chapterWords.concat(
     session.extraWords.filter(w => session.extraStillNeeded.has(w.wid))
   );
   const order = shuffle(queueWords);
   const attemptState = { pos: 0, order, correctThisAttempt: {} };
+  saveProgress('quiz', session, attemptState);
   renderQuizQuestion(session, attemptState);
 }
 
@@ -970,6 +1034,7 @@ function renderQuizQuestion(session, attemptState) {
     answered = true;
     const correct = checkAnswer(val, word);
     attemptState.correctThisAttempt[word.wid] = correct;
+    saveProgress('quiz', session, attemptState);
     feedback.textContent = correct ? '✓ Richtig!' : ('✗ Richtig wäre: ' + answerWord(word));
     feedback.className = 'feedback ' + (correct ? 'good' : 'bad');
     input.disabled = true;
@@ -983,6 +1048,7 @@ function renderQuizQuestion(session, attemptState) {
   const goNext = () => {
     if (!answered) return;
     attemptState.pos++;
+    saveProgress('quiz', session, attemptState);
     renderQuizQuestion(session, attemptState);
   };
 
@@ -1010,16 +1076,25 @@ function renderQuizQuestion(session, attemptState) {
 }
 
 function finishAttempt(session, attemptState) {
-  const cfg = cfgFor(session.lang, session.bookIdx);
-  crumb.textContent = session.chapterTitle + ' · Ergebnis Versuch ' + session.attempt;
-  app.innerHTML = '';
-
   attemptState.order.forEach(w => {
     const wasCorrect = attemptState.correctThisAttempt[w.wid];
     if (wasCorrect === undefined) return;
     session.tally[w.wid].results.push(!!wasCorrect);
     if (w.isOld && wasCorrect) session.extraStillNeeded.delete(w.wid);
   });
+  const counted0 = attemptState.order.filter(w => !w.srcBook);
+  session.attemptScores.push({ attempt: session.attempt, correct: counted0.filter(w => attemptState.correctThisAttempt[w.wid]).length, total: counted0.length });
+  const view = { order: attemptState.order, correctThisAttempt: attemptState.correctThisAttempt };
+  saveProgress('result', session, view);
+  renderAttemptResult(session, view);
+}
+
+function renderAttemptResult(session, attemptState) {
+  const cfg = cfgFor(session.lang, session.bookIdx);
+  homeBtn.hidden = false;
+  langBtn.hidden = false;
+  crumb.textContent = session.chapterTitle + ' · Ergebnis Versuch ' + session.attempt;
+  app.innerHTML = '';
 
   const numCorrect = Object.values(attemptState.correctThisAttempt).filter(Boolean).length;
   const numTotal = attemptState.order.length;
@@ -1027,7 +1102,6 @@ function finishAttempt(session, attemptState) {
   // Delfin-Quote: nur Wörter aus dem aktuellen Buch (keine Wiederholung aus Vorgängerbüchern)
   const counted = attemptState.order.filter(w => !w.srcBook);
   const cCorrect = counted.filter(w => attemptState.correctThisAttempt[w.wid]).length;
-  session.attemptScores.push({ attempt: session.attempt, correct: cCorrect, total: counted.length });
   const dNeed = session.attempt === 1 ? DOLPHIN_PCT_FIRST : DOLPHIN_PCT_RETRY;
   const dPct = counted.length ? Math.floor(100 * cCorrect / counted.length) : 0;
   const dolphinHint = isCompletedBook(cfg) ? null : '🐬 Delfin-Quote: ' + dPct + ' % (Ziel in diesem Versuch: ' + dNeed + ' %)' + (cCorrect * 100 >= dNeed * counted.length ? ' – geschafft!' : '');
@@ -1112,6 +1186,7 @@ async function submitSession(session) {
     bookKey: cfg.bookKey || null,
     chapterIdx: session.chapterIdx,
   };
+  saveProgress('submit', session, { payload, classified });
   sendSubmission(cfg, session, classified, payload);
 }
 
@@ -1131,6 +1206,7 @@ async function sendSubmission(cfg, session, classified, payload) {
   if (err) return renderSubmitFailed(cfg, session, classified, payload, err);
 
   crumb.textContent = session.chapterTitle + ' · Eingereicht';
+  clearProgress();
   apiInvalidate();
   if (res.dolphinKey && res.dolphinDoc) dolphinMap[res.dolphinKey] = res.dolphinDoc;
   const d = Object.assign({}, payload.submission.dolphin, res.dolphin || {});
