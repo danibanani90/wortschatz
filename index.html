@@ -259,6 +259,7 @@ footer.crumbs { font-size: 12px; color: var(--ink-soft); text-align: center; pad
     </div>
   </header>
 
+  <div id="testBanner" class="dol-note" style="background:var(--warn-bg);border:2px solid var(--warn);font-weight:700;" hidden>🧪 TESTMODUS – zählt nicht für Christopher. Mails gehen nur an dich.</div>
   <div id="apiWarn" class="dol-note" style="background:var(--warn-bg);" hidden></div>
   <main id="app"></main>
 
@@ -320,6 +321,16 @@ langBtn.addEventListener('click', () => renderLanguageSelect());
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmk5wZF_2Wc2kkFdom67YpN1d7Iyctf1iBEuz4HDM9LI1Ky9z9zgILJZTXdiD13r0J/exec';
 const API_KEY = 'ws-WY1B1F6lTkNb8gmS';
 const API_TTL = 5 * 60 * 1000;
+// Testumgebung: Link mit ?test=1 -> eigene Testdaten, Mails nur an Daniel
+const TEST_MODE = /[?&]test(=|&|$)/.test(location.search);
+let testReadyPromise = null;
+function ensureTestReady() {
+  if (!TEST_MODE) return Promise.resolve();
+  if (!testReadyPromise) {
+    testReadyPromise = apiGet({ action: 'ping' }).catch(e => { testReadyPromise = null; throw e; });
+  }
+  return testReadyPromise;
+}
 const apiCache = {};
 const apiPending = {};
 function apiConfigured() { return /^https:\/\//.test(API_URL) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(API_URL); }
@@ -330,20 +341,23 @@ function setApiWarning(msg) {
   b.hidden = !msg;
 }
 async function apiGet(params) {
-  const qs = new URLSearchParams(Object.assign({ key: API_KEY }, params)).toString();
+  const qs = new URLSearchParams(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test' } : {}, params)).toString();
   const res = await fetch(API_URL + '?' + qs, { method: 'GET', redirect: 'follow' });
   const data = await res.json();
   if (!data || !data.ok) throw new Error((data && data.error) || 'Fehler');
+  if (TEST_MODE && data.mode !== 'test') throw new Error('test_not_ready');
   return data;
 }
 async function apiPost(body) {
+  await ensureTestReady();   // Sicherung: nie Testabgaben in Christophers Daten schreiben
   const res = await fetch(API_URL, {
     method: 'POST', redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ key: API_KEY }, body)),
+    body: JSON.stringify(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test' } : {}, body)),
   });
   const data = await res.json();
   if (!data || !data.ok) throw new Error((data && data.error) || 'Fehler');
+  if (TEST_MODE && data.mode !== 'test') throw new Error('test_not_ready');
   return data;
 }
 // Lädt mehrere Sammlungen mit EINEM Aufruf (mit kurzem Zwischenspeicher).
@@ -360,7 +374,9 @@ async function apiList(cols) {
   if (missing.length) {
     const p = apiGet({ action: 'list', collections: missing.join(',') })
       .then(data => { missing.forEach(c => { apiCache[c] = { at: Date.now(), docs: (data.docs && data.docs[c]) || {} }; }); setApiWarning(''); })
-      .catch(() => { setApiWarning('Keine Verbindung zum Speicher – dein Fortschritt wird gerade nicht angezeigt. Bitte Internet prüfen.'); })
+      .catch((e) => { setApiWarning(e && e.message === 'test_not_ready'
+        ? 'Testmodus ist im Google-Skript noch nicht aktiv – bitte die neue Code.gs bereitstellen. Bis dahin wird nichts angezeigt oder gespeichert.'
+        : 'Keine Verbindung zum Speicher – dein Fortschritt wird gerade nicht angezeigt. Bitte Internet prüfen.'); })
       .finally(() => { missing.forEach(c => { delete apiPending[c]; }); });
     missing.forEach(c => { apiPending[c] = p; });
   }
@@ -935,7 +951,7 @@ async function startQuiz(chapterIdx) {
 }
 
 // ---------- ANGEFANGENE ABFRAGE MERKEN (auf diesem Gerät) ----------
-const RESUME_KEY = 'wortschatz.activeQuiz.v1';
+const RESUME_KEY = 'wortschatz.activeQuiz.v1' + (TEST_MODE ? '.test' : '');
 const RESUME_MAX_AGE = 7 * 24 * 3600 * 1000;
 function saveProgress(phase, session, extra) {
   try {
@@ -1201,7 +1217,11 @@ async function sendSubmission(cfg, session, classified, payload) {
   if (!apiConfigured()) err = 'Die App ist noch nicht mit dem Speicher verbunden.';
   else {
     try { res = await apiPost(payload); }
-    catch (e) { err = 'Das Ergebnis konnte nicht gespeichert werden. Bitte prüfe die Internetverbindung und versuche es nochmal.'; }
+    catch (e) {
+      err = e && e.message === 'test_not_ready'
+        ? 'Testmodus ist im Google-Skript noch nicht aktiv. Es wurde nichts gespeichert und keine Mail verschickt.'
+        : 'Das Ergebnis konnte nicht gespeichert werden. Bitte prüfe die Internetverbindung und versuche es nochmal.';
+    }
   }
   if (err) return renderSubmitFailed(cfg, session, classified, payload, err);
 
@@ -1279,6 +1299,7 @@ function renderSubmitted(cfg, classified, saveError, dolphin) {
   }
 }
 
+if (TEST_MODE) { document.getElementById('testBanner').hidden = false; document.title = 'TEST · ' + document.title; }
 renderLanguageSelect();
 </script>
 
