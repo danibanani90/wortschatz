@@ -932,7 +932,7 @@ async function startQuiz(chapterIdx) {
     statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle }));
 
   const tally = {};
-  chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [] }); });
+  chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [] }); });
 
   const session = {
     lang: cfg.key,
@@ -1014,7 +1014,7 @@ function runAttempt(session) {
     session.extraWords.filter(w => session.extraStillNeeded.has(w.wid))
   );
   const order = shuffle(queueWords);
-  const attemptState = { pos: 0, order, correctThisAttempt: {} };
+  const attemptState = { pos: 0, order, correctThisAttempt: {}, answers: {} };
   saveProgress('quiz', session, attemptState);
   renderQuizQuestion(session, attemptState);
 }
@@ -1050,6 +1050,7 @@ function renderQuizQuestion(session, attemptState) {
     answered = true;
     const correct = checkAnswer(val, word);
     attemptState.correctThisAttempt[word.wid] = correct;
+    (attemptState.answers = attemptState.answers || {})[word.wid] = val.trim();
     saveProgress('quiz', session, attemptState);
     feedback.textContent = correct ? '✓ Richtig!' : ('✗ Richtig wäre: ' + answerWord(word));
     feedback.className = 'feedback ' + (correct ? 'good' : 'bad');
@@ -1096,11 +1097,13 @@ function finishAttempt(session, attemptState) {
     const wasCorrect = attemptState.correctThisAttempt[w.wid];
     if (wasCorrect === undefined) return;
     session.tally[w.wid].results.push(!!wasCorrect);
+    const t = session.tally[w.wid];
+    (t.inputs = t.inputs || []).push((attemptState.answers && attemptState.answers[w.wid]) || '');
     if (w.isOld && wasCorrect) session.extraStillNeeded.delete(w.wid);
   });
   const counted0 = attemptState.order.filter(w => !w.srcBook);
   session.attemptScores.push({ attempt: session.attempt, correct: counted0.filter(w => attemptState.correctThisAttempt[w.wid]).length, total: counted0.length });
-  const view = { order: attemptState.order, correctThisAttempt: attemptState.correctThisAttempt };
+  const view = { order: attemptState.order, correctThisAttempt: attemptState.correctThisAttempt, answers: attemptState.answers || {} };
   saveProgress('result', session, view);
   renderAttemptResult(session, view);
 }
@@ -1129,6 +1132,7 @@ function renderAttemptResult(session, attemptState) {
         el('span', { class: 'en' }, w.foreign),
         el('span', { class: 'de' }, w.de),
         w.isOld ? el('span', { class: 'pill ' + (w.srcBook ? 'book' : 'old') }, (w.srcBook ? '📗 ' : '') + w.srcTitle) : null,
+        (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“') : null,
       ]),
       el('span', { class: 'pill ' + (c ? 'good' : 'bad') }, c ? 'richtig' : 'falsch'),
     ]);
@@ -1187,7 +1191,7 @@ async function submitSession(session) {
     attemptsUsed: session.attempt,
     submittedAt: new Date().toISOString(),
     nephewName: NEPHEW_NAME,
-    words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, level: w.level, label: w.label })),
+    words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], level: w.level, label: w.label })),
   };
   const payload = {
     action: 'submit',
