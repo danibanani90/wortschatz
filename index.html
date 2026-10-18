@@ -290,7 +290,7 @@ const LANGS = {
 let currentLang = null;
 let currentBook = null;
 let dolphinMap = {};
-const DOLPHIN_MAX = 3, DOLPHIN_PCT_FIRST = 90, DOLPHIN_PCT_RETRY = 98;
+const DOLPHIN_MAX = 3, DOLPHIN_PCT_FIRST = 90, DOLPHIN_PCT_RETRY = 90, DOLPHIN_PER_DAY = 3;
 function cfgFor(langKey, bookIdx) {
   const lang = LANGS[langKey];
   if (!lang) return null;
@@ -874,7 +874,7 @@ async function renderHome() {
   if (isCompletedBook(cfg)) {
     document.querySelectorAll('.dol-row').forEach(n => { n.style.display = 'none'; });
     if (dsum) dsum.textContent = '✅ Dieses Buch ist abgeschlossen. Delfine gibt es jetzt in ' + LANGS[cfg.key].books.filter(b => !b.completed).map(b => b.label).join(', ') + '. Die Wörter hier kommen dort als Wiederholung dran.';
-  } else if (dsum) dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion, 1 pro Tag)';
+  } else if (dsum) dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion)';
   cfg.chapters.forEach((c, idx) => {
     const fill = document.getElementById('mfill-' + idx);
     const label = document.getElementById('mlabel-' + idx);
@@ -1011,7 +1011,7 @@ function resumeCard() {
 
 function runAttempt(session) {
   const queueWords = session.chapterWords.concat(
-    session.extraWords.filter(w => session.extraStillNeeded.has(w.wid))
+    session.extraWords   // jeder Versuch: wieder ALLE Wörter (Lektion + alle Wiederholungswörter)
   );
   const order = shuffle(queueWords);
   const attemptState = { pos: 0, order, correctThisAttempt: {}, answers: {} };
@@ -1151,7 +1151,7 @@ function renderAttemptResult(session, attemptState) {
     dolphinHint ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, dolphinHint) : null,
     !canRetry
       ? el('div', { class: 'quiz-sub' }, 'Das war der letzte Versuch – bitte einreichen.')
-      : el('div', { class: 'quiz-sub' }, 'Versuch ' + session.attempt + ' von ' + session.maxAttempts + (session.extraStillNeeded.size ? ' · Wiederholungswörter kommen beim nächsten Versuch wieder, bis sie richtig sind' : '')),
+      : el('div', { class: 'quiz-sub' }, 'Versuch ' + session.attempt + ' von ' + session.maxAttempts + ' · Beim nächsten Versuch kommen wieder alle Wörter dran'),
   ]));
   app.appendChild(el('div', { class: 'card' }, [
     el('div', { class: 'section-title' }, 'Deine Antworten'),
@@ -1256,9 +1256,9 @@ function dolphinNote(d) {
   if (!d) return null;
   let t = null;
   if (d.earned) t = '🐬 Neuer Delfin verdient! (' + d.chapterCount + ' von ' + DOLPHIN_MAX + ' für diese Unterlektion · insgesamt ' + d.total + ')';
-  else if (d.reason === 'today') t = '🐬 Für diese Unterlektion hast du heute schon einen Delfin geholt. Morgen kannst du den nächsten verdienen!';
+  else if (d.reason === 'today') t = '🐬 Für diese Unterlektion hast du heute schon ' + DOLPHIN_PER_DAY + ' Delfine geholt. Morgen geht es weiter!';
   else if (d.reason === 'max') t = '🏆 Du hast schon alle ' + DOLPHIN_MAX + ' Delfine für diese Unterlektion – stark!';
-  else if (d.reason === 'score') t = '🐬 Quote: ' + d.pct + ' %. Für einen Delfin brauchst du im 1. Versuch ' + DOLPHIN_PCT_FIRST + ' %, im 2. und 3. Versuch ' + DOLPHIN_PCT_RETRY + ' % richtig. Beim nächsten Mal klappt es!';
+  else if (d.reason === 'score') t = '🐬 Quote: ' + d.pct + ' %. Für einen Delfin brauchst du in einem Versuch mindestens ' + DOLPHIN_PCT_FIRST + ' % richtig. Beim nächsten Mal klappt es!';
   return t ? el('div', { class: 'dol-note' }, t) : null;
 }
 
