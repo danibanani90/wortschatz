@@ -157,6 +157,24 @@ button.small { padding: 6px 12px; font-size: 13px; }
 @keyframes dolSpark { 0%,100%{opacity:0;transform:scale(.4)} 50%{opacity:1;transform:scale(1.2)} }
 .dol-note { padding:12px 14px; border-radius:12px; background: var(--accent-soft); color: var(--ink); font-size:14px; text-align:center; width:100%; }
 .dol-summary { font-size:13px; color: var(--ink-soft); margin-bottom:10px; }
+/* Ziele */
+.goal-row { display:grid; grid-template-columns: minmax(0,1fr) 72px; gap:4px 10px; align-items:center; margin:6px 0; }
+.goal-row .lbl { font-size:14px; }
+.goal-row .val { font-size:13px; text-align:right; white-space:nowrap; font-variant-numeric: tabular-nums; }
+.goal-row .goal-track { grid-column: 1 / -1; height:10px; border-radius:999px; background: var(--surface-2); overflow:hidden; }
+.goal-row .goal-fill { height:100%; border-radius:999px; transition: width .4s ease; }
+.goal-msg { padding:10px 12px; border-radius:12px; font-size:14px; font-weight:600; line-height:1.4; }
+.goal-msg.green, .goal-msg.reached { background: var(--good-bg); color: var(--good); }
+.goal-msg.yellow, .goal-msg.missed { background: var(--warn-bg); color: var(--warn); }
+.goal-msg.red { background: var(--bad-bg); color: var(--bad); }
+.goal-head { font-family:"Fredoka",sans-serif; font-size:17px; font-weight:600; }
+.goal-sub { font-size:13px; color: var(--ink-soft); }
+.goal-steps { display:flex; flex-direction:column; gap:8px; }
+.goal-step { display:flex; gap:10px; align-items:flex-start; font-size:14px; }
+.goal-step .ico { width:24px; text-align:center; flex:none; }
+.dol-next { display:block; font-size:11px; color: var(--ink-soft); margin-top:2px; }
+#simBox { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; font-weight:600; }
+#simBox input { font: inherit; padding:4px 8px; border-radius:8px; border:1px solid var(--warn); background: var(--surface); color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .dol-jump, .dol-jump span, .dol-waves, .dol-slot.new, .dol-total.bump, .dol-spark { animation: none !important; }
   .dol-jump { left:46%; } .dol-spark { opacity:1; }
@@ -259,7 +277,8 @@ footer.crumbs { font-size: 12px; color: var(--ink-soft); text-align: center; pad
     </div>
   </header>
 
-  <div id="testBanner" class="dol-note" style="background:var(--warn-bg);border:2px solid var(--warn);font-weight:700;" hidden>🧪 TESTMODUS – zählt nicht für Christopher. Mails gehen nur an dich.</div>
+  <div id="testBanner" class="dol-note" style="background:var(--warn-bg);border:2px solid var(--warn);font-weight:700;" hidden>🧪 TESTMODUS – zählt nicht für Christopher. Mails gehen nur an dich.
+    <div id="simBox">📆 Simuliertes Datum: <input type="date" id="simDateInput"> <button class="small" id="simDateReset">Echtes Datum</button></div></div>
   <div id="apiWarn" class="dol-note" style="background:var(--warn-bg);" hidden></div>
   <main id="app"></main>
 
@@ -333,6 +352,7 @@ function ensureTestReady() {
 }
 const apiCache = {};
 const apiPending = {};
+let SERVER_GOALS = false;   // true, sobald das Google-Skript Lerntage/1-2-7 kennt
 function apiConfigured() { return /^https:\/\//.test(API_URL) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(API_URL); }
 function setApiWarning(msg) {
   const b = document.getElementById('apiWarn');
@@ -353,7 +373,7 @@ async function apiPost(body) {
   const res = await fetch(API_URL, {
     method: 'POST', redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test' } : {}, body)),
+    body: JSON.stringify(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test', simDate: simDate() } : {}, body)),
   });
   const data = await res.json();
   if (!data || !data.ok) throw new Error((data && data.error) || 'Fehler');
@@ -373,7 +393,11 @@ async function apiList(cols) {
   const missing = cols.filter(c => !(apiCache[c] && now - apiCache[c].at < API_TTL) && !apiPending[c]);
   if (missing.length) {
     const p = apiGet({ action: 'list', collections: missing.join(',') })
-      .then(data => { missing.forEach(c => { apiCache[c] = { at: Date.now(), docs: (data.docs && data.docs[c]) || {} }; }); setApiWarning(''); })
+      .then(data => {
+        if (data.docs && data.docs.learningDays && Array.isArray(data.docs.learningDays.list)) SERVER_GOALS = true;
+        missing.forEach(c => { apiCache[c] = { at: Date.now(), docs: (data.docs && data.docs[c]) || {} }; });
+        setApiWarning('');
+      })
       .catch((e) => { setApiWarning(e && e.message === 'test_not_ready'
         ? 'Testmodus ist im Google-Skript noch nicht aktiv – bitte die neue Code.gs bereitstellen. Bis dahin wird nichts angezeigt oder gespeichert.'
         : 'Keine Verbindung zum Speicher – dein Fortschritt wird gerade nicht angezeigt. Bitte Internet prüfen.'); })
@@ -619,6 +643,299 @@ async function loadPrevBooks(langKey, bookIdx) {
 }
 
 // ---------- DELFINE ----------
+// ===================== ZIELE (identisch in App und Google-Skript) =====================
+// Werte sind jeweils GESAMTSTAND bis zum Datum (nicht zusätzlich).
+const GOALS = {
+  planStart: '2026-10-21',
+  milestones: [
+    { key: 'z1', name: 'Zwischenziel 1', date: '2026-12-24', en: 20, fr: 12, days: 22 },
+    { key: 'z2', name: 'Zwischenziel 2', date: '2027-03-15', en: 45, fr: 25, days: 65 },
+    { key: 'end', name: 'Endziel', date: '2027-06-01', en: 75, fr: 40, days: 110, final: true },
+  ],
+  greenAt: 1.0,   // ab 100 % des Plans grün
+  yellowAt: 0.8,  // ab 80 % des Plans gelb, darunter rot
+  recentDays: 14, // so lange nach einem Zwischenziel wird "geschafft"/"verpasst" hervorgehoben
+};
+const GOAL_METRICS = [
+  { key: 'en', label: 'Delfine Englisch', short: 'Delfine Englisch', flag: '🇬🇧' },
+  { key: 'fr', label: 'Delfine Französisch', short: 'Delfine Französisch', flag: '🇫🇷' },
+  { key: 'days', label: 'Lerntage', short: 'Lerntage', flag: '📅' },
+];
+const GOAL_MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+
+function gDay_(s) { const p = String(s).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000; }
+function gStr_(n) { return new Date(n * 86400000).toISOString().slice(0, 10); }
+function gFmt_(s) { const p = String(s).split('-'); return p[2] + '.' + p[1] + '.' + p[0]; }
+function gLong_(s, withYear) { const p = String(s).split('-'); return (+p[2]) + '. ' + GOAL_MONTHS[+p[1] - 1] + (withYear ? ' ' + p[0] : ''); }
+
+// facts = { dolphinDates: { en: [Datum, ...], fr: [...] }, dayDates: [eindeutige Lerntage] }
+function goalFacts_(dolphinDocs, learningDays) {
+  const dd = { en: [], fr: [] };
+  (dolphinDocs || []).forEach(doc => {
+    if (!doc || (doc.lang !== 'en' && doc.lang !== 'fr')) return;
+    const hist = Array.isArray(doc.history) ? doc.history.filter(h => h && h.date) : [];
+    const n = Math.max(doc.count || 0, 0);
+    for (let i = 0; i < n; i++) dd[doc.lang].push(hist[i] ? hist[i].date : (doc.lastDate || '2026-10-10'));
+  });
+  const days = Array.from(new Set((learningDays || []).map(x => x && x.date).filter(Boolean))).sort();
+  return { dolphinDates: dd, dayDates: days };
+}
+
+function goalValuesAt_(facts, date) {
+  const d = gDay_(date);
+  const cnt = arr => arr.filter(x => gDay_(x) <= d).length;
+  return { en: cnt(facts.dolphinDates.en), fr: cnt(facts.dolphinDates.fr), days: cnt(facts.dayDates) };
+}
+
+function goalStatus_(facts, today) {
+  const t = gDay_(today);
+  const cur = goalValuesAt_(facts, today);
+  const ms = GOALS.milestones;
+  const final = ms[ms.length - 1];
+  const rank = { green: 0, yellow: 1, red: 2 };
+  const missingOf = (m, v) => GOAL_METRICS.filter(x => v[x.key] < m[x.key])
+    .map(x => ({ key: x.key, label: x.label, flag: x.flag, missing: m[x.key] - v[x.key] }));
+
+  const passed = ms.filter(m => gDay_(m.date) < t).map(m => {
+    const v = goalValuesAt_(facts, m.date);
+    const missing = missingOf(m, v);
+    return { m, values: v, reached: missing.length === 0, missing, daysAgo: t - gDay_(m.date) };
+  });
+  const lastPassed = passed.length ? passed[passed.length - 1] : null;
+  const idx = ms.findIndex(m => gDay_(m.date) >= t);
+  if (idx < 0) return { today, cur, final, next: null, passed, lastPassed, finished: true, overall: lastPassed.reached ? 'green' : 'red', metrics: [] };
+
+  const next = ms[idx];
+  const prev = idx > 0 ? ms[idx - 1] : { date: GOALS.planStart, en: 0, fr: 0, days: 0 };
+  // Plan der aktuellen Etappe startet beim TATSÄCHLICHEN Stand am letzten Zwischenziel (falls darunter),
+  // damit ein verpasstes Zwischenziel nicht sofort "rot" macht – aufholen bis zum nächsten reicht.
+  const prevActual = idx > 0 ? goalValuesAt_(facts, prev.date) : { en: 0, fr: 0, days: 0 };
+  const p0 = gDay_(prev.date), p1 = gDay_(next.date);
+  const span = Math.max(1, p1 - p0);
+  const frac = Math.max(0, Math.min(1, (t - p0) / span));
+  const fracWeek = Math.max(0, Math.min(1, (t + 7 - p0) / span));
+  const daysLeft = p1 - t + 1;   // inkl. heute
+
+  const metrics = GOAL_METRICS.map(x => {
+    const target = next[x.key], have = cur[x.key];
+    const start = Math.min(prev[x.key], prevActual[x.key]);
+    const expected = start + (target - start) * frac;
+    const expectedWeek = start + (target - start) * fracWeek;
+    let status;
+    if (have >= target) status = 'green';
+    else if (x.key === 'days' && target - have > daysLeft) status = 'red';      // rechnerisch nicht mehr möglich
+    else if (expected <= 0 || have >= GOALS.greenAt * Math.floor(expected)) status = 'green';   // ganze Delfine/Tage
+    else if (have >= GOALS.yellowAt * expected) status = 'yellow';
+    else status = 'red';
+    const catchUp = Math.max(1, Math.ceil(expectedWeek - have));
+    return { key: x.key, label: x.label, flag: x.flag, have, target, expected, status,
+             catchUp: x.key === 'days' ? Math.min(7, catchUp) : catchUp, finalTarget: final[x.key] };
+  });
+  const overall = metrics.reduce((w, m) => (rank[m.status] > rank[w] ? m.status : w), 'green');
+
+  const h0 = idx > 0 ? p0 + 1 : p0;   // Etappe beginnt am Tag nach dem letzten Zwischenziel
+  const midDay = h0 + Math.floor((p1 - h0) / 2);
+  const half = { date: gStr_(midDay), upcoming: t <= midDay };
+  GOAL_METRICS.forEach(x => { half[x.key] = Math.ceil((prev[x.key] + next[x.key]) / 2); });
+  if (!half.upcoming) {
+    const hv = goalValuesAt_(facts, half.date);
+    half.values = hv;
+    half.reached = GOAL_METRICS.every(x => hv[x.key] >= half[x.key]);
+  }
+  return { today, cur, final, next, prev, metrics, overall, half, daysLeft, passed, lastPassed, finished: false };
+}
+
+// Freigegebene Formulierungen. audience: 'kid' (Chris in der App) oder 'parent' (Eltern-Mail).
+function goalMessages_(st, audience, name) {
+  const out = [];
+  const lp = st.lastPassed;
+  const nextLong = st.next ? gLong_(st.next.date) : '';
+  if (lp && lp.daysAgo <= GOALS.recentDays && !lp.m.final) {
+    if (lp.reached) {
+      out.push({ type: 'reached', text: audience === 'kid'
+        ? '🎉 ' + lp.m.name + ' geschafft! Wie stark ist das denn, ' + name + '? Dein nächstes Ziel: ' + nextLong + '.'
+        : '🎉 ' + name + ' hat das ' + lp.m.name + ' (' + gFmt_(lp.m.date) + ') geschafft!' });
+    } else {
+      const miss = lp.missing.map(x => x.missing + ' ' + x.label).join(', ');
+      out.push({ type: 'missed', text: audience === 'kid'
+        ? 'Das ' + lp.m.name + ' vom ' + gLong_(lp.m.date) + ' hat diesmal nicht ganz geklappt – und das ist überhaupt nicht schlimm! Du kannst alles bis zum nächsten Zwischenziel am ' + nextLong + ' aufholen. Am Ende zählt dein großes Ziel. 💪'
+        : lp.m.name + ' (' + gFmt_(lp.m.date) + ') wurde nicht ganz erreicht – es fehlen ' + miss + '. ' + name + ' kann das bis zum nächsten Zwischenziel am ' + gFmt_(st.next ? st.next.date : st.final.date) + ' aufholen.' });
+    }
+  }
+  if (st.finished) {
+    out.push({ type: st.lastPassed.reached ? 'reached' : 'missed', text: st.lastPassed.reached
+      ? (audience === 'kid' ? '🏆 Du hast dein großes Ziel geschafft, ' + name + '! Unglaublich stark!' : '🏆 ' + name + ' hat das Endziel erreicht!')
+      : (audience === 'kid' ? 'Das große Ziel ist vorbei – und du hast richtig viel gelernt, ' + name + '! 💪' : 'Das Endziel ist vorbei. Fehlend: ' + st.lastPassed.missing.map(x => x.missing + ' ' + x.label).join(', ') + '.') });
+    return out;
+  }
+  const isFinal = !!st.next.final;
+  if (st.overall === 'green') {
+    out.push({ type: 'green', text: audience === 'kid'
+      ? 'Super, ' + name + '! 🐬 Du bist voll im Plan für dein nächstes Ziel. Weiter so!'
+      : name + ' ist im Plan für ' + (isFinal ? 'das Endziel.' : 'das nächste Zwischenziel.') });
+  } else if (st.overall === 'yellow') {
+    const lagging = st.metrics.filter(m => m.status !== 'green');
+    const daysM = lagging.find(m => m.key === 'days');
+    const dol = lagging.filter(m => m.key !== 'days');
+    const langName = k => (k === 'en' ? 'Englisch' : 'Französisch');
+    if (audience === 'kid') {
+      const parts = [];
+      if (daysM) parts.push('an ' + daysM.catchUp + ' ' + (daysM.catchUp === 1 ? 'Tag' : 'Tagen') + ' übst');
+      if (dol.length) parts.push(dol.map((m, i) => m.catchUp + (i === 0 ? ' ' + (m.catchUp === 1 ? 'Delfin' : 'Delfine') : '') + ' in ' + langName(m.key)).join(' und ') + ' holst');
+      out.push({ type: 'yellow', text: 'Du bist ein kleines bisschen hinter dem Plan – das ist kein Problem! Wenn du diese Woche ' + parts.join(' und ') + ', bist du wieder voll dabei. 💪' });
+    } else {
+      const parts = [];
+      if (daysM) parts.push('etwa ' + daysM.catchUp + ' Lerntagen pro Woche');
+      if (dol.length) parts.push(dol.map(m => m.catchUp + ' ' + (m.catchUp === 1 ? 'Delfin' : 'Delfinen') + ' ' + langName(m.key)).join(' und ') + ' in dieser Woche');
+      out.push({ type: 'yellow', text: name + ' ist etwas hinter dem Plan. Mit ' + parts.join(' und ') + ' holt er das wieder auf – ein kleiner Anstoß kann jetzt helfen.' });
+    }
+  } else {
+    out.push({ type: 'red', text: audience === 'kid'
+      ? (isFinal
+        ? 'Dein großes Ziel wird ganz schön knapp. Gib nicht auf – jeder Tag, an dem du übst, bringt dich näher ran! 🏆'
+        : 'Dieses Zwischenziel wird ganz schön knapp. Keine Sorge: Zwischenziele sind nur Etappen – am Ende zählt dein großes Ziel am ' + gLong_(st.final.date) + '. 🏆 Jeder Tag, an dem du übst, bringt dich näher ran!')
+      : (isFinal
+        ? 'Das Endziel wird knapp. Ermutigung hilft jetzt mehr als Druck.'
+        : 'Das nächste Zwischenziel wird knapp. Zwischenziele sind Etappen – entscheidend ist das Endziel am ' + gFmt_(st.final.date) + '. Ermutigung hilft jetzt mehr als Druck.') });
+  }
+  return out;
+}
+
+// 1-2-7-Regel: Ab wann ist der nächste Delfin einer Unterlektion möglich? (null = sofort)
+function nextDolphinDate_(doc) {
+  const n = (doc && doc.count) || 0;
+  if (n <= 0 || n >= 3) return null;
+  const hist = (doc.history || []).filter(h => h && h.date);
+  const first = hist[0] ? hist[0].date : doc.lastDate;
+  const last = hist[n - 1] ? hist[n - 1].date : doc.lastDate;
+  if (!first || !last) return null;
+  if (n === 1) return gStr_(gDay_(last) + 1);
+  return gStr_(Math.max(gDay_(first) + 7, gDay_(last) + 1));
+}
+// ===================== /ZIELE =====================
+
+// Heute (im Testmodus ggf. simuliert)
+function simDate() {
+  if (!TEST_MODE) return null;
+  try { const v = localStorage.getItem('wortschatz.simDate'); return /^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null; } catch (e) { return null; }
+}
+function todayStr() { return simDate() || berlinDate(); }
+
+async function loadGoalStatus() {
+  const data = await apiList(['dolphins', 'learningDays']);
+  const docs = Object.values(data.dolphins || {});
+  const ld = data.learningDays && Array.isArray(data.learningDays.list) ? data.learningDays.list : null;
+  const st = goalStatus_(goalFacts_(docs, ld || []), todayStr());
+  st.daysUnknown = !ld;
+  return st;
+}
+function goalBarRow(flag, label, have, target, color, light) {
+  const pct = Math.max(0, Math.min(100, Math.round(100 * have / Math.max(1, target))));
+  return el('div', { class: 'goal-row' }, [
+    el('div', { class: 'lbl' }, (light ? light + ' ' : '') + flag + ' ' + label),
+    el('div', { class: 'val' }, have + ' / ' + target),
+    el('div', { class: 'goal-track' }, el('div', { class: 'goal-fill', style: 'width:' + pct + '%;background:' + color + ';' })),
+  ]);
+}
+const GOAL_COLORS = { green: 'var(--good)', yellow: 'var(--warn)', red: 'var(--bad)' };
+const GOAL_LIGHTS = { green: '🟢', yellow: '🟡', red: '🔴' };
+function goalMsgEls(st) {
+  return goalMessages_(st, 'kid', NEPHEW_NICK).map(m => el('div', { class: 'goal-msg ' + m.type }, m.text));
+}
+function nextGoalTitle(st) {
+  if (!st.next) return '🏆 Endziel vorbei';
+  return (st.next.final ? '🎯 Auf dem Weg zum Endziel' : '🎯 ' + st.next.name + ' · ' + gLong_(st.next.date)) +
+    ' (noch ' + st.daysLeft + (st.daysLeft === 1 ? ' Tag' : ' Tage') + ')';
+}
+async function fillGoalCard(box) {
+  try {
+    const st = await loadGoalStatus();
+    if (!box.isConnected) return;
+    if (st.daysUnknown) { box.remove(); return; }   // altes Google-Skript: Ziele erst nach dem Update zeigen
+    box.innerHTML = '';
+    box.appendChild(el('div', { class: 'section-title' }, '🏆 Dein großes Ziel · ' + gLong_(st.final.date, true)));
+    goalMsgEls(st).forEach(x => box.appendChild(x));
+    if (st.next) {
+      box.appendChild(el('div', { class: 'goal-head', style: 'margin-top:4px;' }, nextGoalTitle(st)));
+      st.metrics.forEach(m => box.appendChild(goalBarRow(m.flag, m.label, m.have, m.target, GOAL_COLORS[m.status], GOAL_LIGHTS[m.status])));
+    }
+    box.appendChild(el('div', { class: 'toolbar' }, el('button', { onclick: () => renderGoals() }, 'Alle Ziele ansehen')));
+  } catch (e) { box.remove(); }
+}
+
+async function renderGoals() {
+  homeBtn.hidden = true;
+  langBtn.hidden = false;
+  crumb.textContent = 'Deine Ziele';
+  app.innerHTML = '';
+  app.appendChild(el('div', { class: 'card center-col' }, [el('div', { class: 'big-check' }, 'Ziele werden geladen …')]));
+  const st = await loadGoalStatus();
+  app.innerHTML = '';
+  app.appendChild(el('div', { class: 'hero' }, [
+    el('div', { class: 'greeting' }, '🏆 Deine Ziele, ' + NEPHEW_NICK + '!'),
+    el('div', { class: 'sub' }, 'Großes Ziel bis ' + gLong_(st.final.date, true) + ' – mit zwei Etappen auf dem Weg dorthin.'),
+  ]));
+  const msgCard = el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:8px;' }, goalMsgEls(st));
+  app.appendChild(msgCard);
+
+  if (st.next) {
+    const c = el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:4px;' }, [
+      el('div', { class: 'goal-head' }, nextGoalTitle(st)),
+      ...st.metrics.map(m => goalBarRow(m.flag, m.label, m.have, m.target, GOAL_COLORS[m.status], GOAL_LIGHTS[m.status])),
+    ]);
+    const hf = st.half;
+    const hv = GOAL_METRICS.map(x => x.flag + ' ' + hf[x.key]).join(' · ');
+    c.appendChild(el('div', { class: 'goal-sub', style: 'margin-top:6px;' },
+      '⏱️ Halbzeit-Check am ' + gLong_(hf.date) + ': ' + hv + (hf.upcoming ? '' : (hf.reached ? ' – geschafft ✓' : ' – noch nicht ganz'))));
+    c.appendChild(el('div', { class: 'goal-sub' }, '🟢 im Plan · 🟡 wird knapp · 🔴 kaum noch zu schaffen'));
+    app.appendChild(c);
+  }
+  app.appendChild(el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:4px;' }, [
+    el('div', { class: 'goal-head' }, '🏆 Großes Ziel · ' + gLong_(st.final.date, true)),
+    ...GOAL_METRICS.map(x => goalBarRow(x.flag, x.label, st.cur[x.key], st.final[x.key], 'var(--accent)', '')),
+  ]));
+
+  // Etappen
+  const t = gDay_(st.today);
+  const steps = [];
+  let prev = { date: GOALS.planStart, en: 0, fr: 0, days: 0 };
+  GOALS.milestones.forEach(m => {
+    const h0 = gDay_(prev.date) + (prev.key ? 1 : 0);   // wie goalStatus_: Etappe beginnt am Tag nach dem Zwischenziel
+    const mid = gStr_(h0 + Math.floor((gDay_(m.date) - h0) / 2));
+    const midVals = GOAL_METRICS.map(x => x.flag + ' ' + Math.ceil((prev[x.key] + m[x.key]) / 2)).join(' · ');
+    steps.push({ date: mid, title: '⏱️ Halbzeit-Check', detail: midVals, check: true, target: m, prevT: prev });
+    steps.push({ date: m.date, title: (m.final ? '🏆 ' : '🎯 ') + m.name, detail: GOAL_METRICS.map(x => x.flag + ' ' + m[x.key]).join(' · '), m });
+    prev = m;
+  });
+  const passedMap = {};
+  st.passed.forEach(p => { passedMap[p.m.key] = p; });
+  app.appendChild(el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:8px;' }, [
+    el('div', { class: 'section-title' }, 'Deine Etappen'),
+    el('div', { class: 'goal-steps' }, steps.map(sp => {
+      let ico = '⏳';
+      if (gDay_(sp.date) < t) {
+        if (sp.m) ico = passedMap[sp.m.key] && passedMap[sp.m.key].reached ? '✅' : '💪';
+        else ico = '✔️';
+      }
+      if (sp.m && st.next && sp.m.key === st.next.key) ico = '👉';
+      return el('div', { class: 'goal-step' }, [
+        el('div', { class: 'ico' }, ico),
+        el('div', {}, [el('div', { style: 'font-weight:600;' }, sp.title + ' · ' + gLong_(sp.date, true)), el('div', { class: 'goal-sub' }, sp.detail)]),
+      ]);
+    })),
+    el('div', { class: 'goal-sub' }, '✅ geschafft · 💪 verpasst, wird bis zur nächsten Etappe aufgeholt · 👉 aktuelle Etappe'),
+  ]));
+  app.appendChild(el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:6px;' }, [
+    el('div', { class: 'section-title' }, 'So sammelst du'),
+    el('div', { class: 'goal-step' }, [el('div', { class: 'ico' }, '📅'), el('div', {}, 'Ein Lerntag zählt, wenn du an diesem Tag mindestens eine Abfrage einreichst – egal in welcher Sprache.')]),
+    el('div', { class: 'goal-step' }, [el('div', { class: 'ico' }, '🐬'), el('div', {}, 'Einen Delfin gibt es ab 90 % richtig – in jedem Versuch.')]),
+    el('div', { class: 'goal-step' }, [el('div', { class: 'ico' }, '🗓️'), el('div', {}, '1-2-7-Regel: Delfin 1 sofort, Delfin 2 frühestens am nächsten Tag, Delfin 3 frühestens eine Woche nach dem ersten. So bleiben die Wörter richtig lange im Kopf.')]),
+  ]));
+  if (st.daysUnknown) app.appendChild(el('div', { class: 'dol-note', style: 'background:var(--warn-bg);' }, 'Lerntage werden angezeigt, sobald das Google-Skript aktualisiert ist.'));
+  app.appendChild(el('div', { class: 'toolbar', style: 'justify-content:center;' }, el('button', { class: 'primary', onclick: () => renderLanguageSelect() }, 'Zurück')));
+  window.scrollTo(0, 0);
+}
+
 function berlinDate() {
   try { return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' }); }
   catch (e) { return new Date().toISOString().slice(0, 10); }
@@ -680,6 +997,7 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
     el('div', { class: 'quiz-sub' }, 'Du hast ' + d.pct + ' % richtig und dir einen neuen Delfin verdient!'),
     dolSlotsEl(d.chapterCount, true),
     el('div', { class: 'quiz-sub' }, d.chapterCount + ' von ' + DOLPHIN_MAX + ' Delfinen für „' + session.chapterTitle + '“ · insgesamt 🐬 ' + d.total),
+    d.nextDate ? el('div', { class: 'quiz-sub' }, 'Den nächsten Delfin hier kannst du ab dem ' + gLong_(d.nextDate) + ' holen.') : null,
     el('button', { class: 'primary', onclick: onNext }, 'Weiter'),
   ]));
   updateDolphinTotal(true);
@@ -761,6 +1079,9 @@ function renderLanguageSelect() {
   ]));
   const rc0 = resumeCard();
   if (rc0) app.appendChild(rc0);
+  const goalBox = el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:8px;' }, el('div', { class: 'goal-sub' }, '🏆 Ziele werden geladen …'));
+  app.appendChild(goalBox);
+  fillGoalCard(goalBox);
 
   const grid = el('div', { class: 'grid' });
   Object.values(LANGS).forEach(cfg => {
@@ -863,18 +1184,23 @@ async function renderHome() {
     buildChapterPicker(cfg),
   ]));
 
-  await apiList([cfg.statsCollection, 'dolphins']);
+  await apiList([cfg.statsCollection, 'dolphins', 'learningDays']);
   const statsMap = await fetchStatsMap(cfg);
   await loadDolphins();
   cfg.chapters.forEach((c, idx) => {
     const box = document.getElementById('dol-' + idx);
-    if (box) { box.innerHTML = ''; box.appendChild(dolSlotsEl(dolCount(cfg, idx))); }
+    if (box) {
+      box.innerHTML = '';
+      box.appendChild(dolSlotsEl(dolCount(cfg, idx)));
+      const nd = nextDolphinDate_(dolphinMap[dolKey(cfg, idx)]);
+      if (SERVER_GOALS && nd && gDay_(nd) > gDay_(todayStr())) box.appendChild(el('span', { class: 'dol-next' }, 'nächster 🐬 ab ' + gFmt_(nd).slice(0, 6)));
+    }
   });
   const dsum = document.getElementById('dolSummary');
   if (isCompletedBook(cfg)) {
     document.querySelectorAll('.dol-row').forEach(n => { n.style.display = 'none'; });
     if (dsum) dsum.textContent = '✅ Dieses Buch ist abgeschlossen. Delfine gibt es jetzt in ' + LANGS[cfg.key].books.filter(b => !b.completed).map(b => b.label).join(', ') + '. Die Wörter hier kommen dort als Wiederholung dran.';
-  } else if (dsum) dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion)';
+  } else if (dsum) dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion · 1-2-7-Regel)';
   cfg.chapters.forEach((c, idx) => {
     const fill = document.getElementById('mfill-' + idx);
     const label = document.getElementById('mlabel-' + idx);
@@ -1123,7 +1449,10 @@ function renderAttemptResult(session, attemptState) {
   const cCorrect = counted.filter(w => attemptState.correctThisAttempt[w.wid]).length;
   const dNeed = session.attempt === 1 ? DOLPHIN_PCT_FIRST : DOLPHIN_PCT_RETRY;
   const dPct = counted.length ? Math.floor(100 * cCorrect / counted.length) : 0;
-  const dolphinHint = isCompletedBook(cfg) ? null : '🐬 Delfin-Quote: ' + dPct + ' % (Ziel in diesem Versuch: ' + dNeed + ' %)' + (cCorrect * 100 >= dNeed * counted.length ? ' – geschafft!' : '');
+  const waitUntil = nextDolphinDate_(dolphinMap[dolKey(cfg, session.chapterIdx)]);
+  const mustWait = SERVER_GOALS && waitUntil && gDay_(waitUntil) > gDay_(todayStr());
+  const dolphinHint = isCompletedBook(cfg) ? null : '🐬 Delfin-Quote: ' + dPct + ' % (Ziel in diesem Versuch: ' + dNeed + ' %)' +
+    (cCorrect * 100 >= dNeed * counted.length ? (mustWait ? ' – stark! Der nächste Delfin für diese Unterlektion ist aber erst ab dem ' + gLong_(waitUntil) + ' möglich.' : ' – geschafft!') : '');
 
   const list = el('div', {}, attemptState.order.map(w => {
     const c = attemptState.correctThisAttempt[w.wid];
@@ -1256,6 +1585,7 @@ function dolphinNote(d) {
   if (!d) return null;
   let t = null;
   if (d.earned) t = '🐬 Neuer Delfin verdient! (' + d.chapterCount + ' von ' + DOLPHIN_MAX + ' für diese Unterlektion · insgesamt ' + d.total + ')';
+  else if (d.reason === 'wait') t = '🐬 Super gemacht! Den nächsten Delfin für diese Unterlektion kannst du ab dem ' + gLong_(d.nextDate) + ' holen – so bleiben die Wörter richtig lange im Kopf.';
   else if (d.reason === 'today') t = '🐬 Für diese Unterlektion hast du heute schon ' + DOLPHIN_PER_DAY + ' Delfine geholt. Morgen geht es weiter!';
   else if (d.reason === 'max') t = '🏆 Du hast schon alle ' + DOLPHIN_MAX + ' Delfine für diese Unterlektion – stark!';
   else if (d.reason === 'score') t = '🐬 Quote: ' + d.pct + ' %. Für einen Delfin brauchst du in einem Versuch mindestens ' + DOLPHIN_PCT_FIRST + ' % richtig. Beim nächsten Mal klappt es!';
@@ -1303,7 +1633,22 @@ function renderSubmitted(cfg, classified, saveError, dolphin) {
   }
 }
 
-if (TEST_MODE) { document.getElementById('testBanner').hidden = false; document.title = 'TEST · ' + document.title; }
+if (TEST_MODE) {
+  document.getElementById('testBanner').hidden = false;
+  document.title = 'TEST · ' + document.title;
+  const si = document.getElementById('simDateInput');
+  si.value = simDate() || berlinDate();
+  const applySim = (v) => {
+    try { if (v) localStorage.setItem('wortschatz.simDate', v); else localStorage.removeItem('wortschatz.simDate'); } catch (e) { /* egal */ }
+    si.value = simDate() || berlinDate();
+    apiInvalidate();
+    renderLanguageSelect();
+  };
+  si.addEventListener('change', () => applySim(si.value && si.value !== berlinDate() ? si.value : null));
+  document.getElementById('simDateReset').addEventListener('click', () => applySim(null));
+} else {
+  const sb = document.getElementById('simBox'); if (sb) sb.remove();
+}
 renderLanguageSelect();
 </script>
 
