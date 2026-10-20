@@ -338,6 +338,8 @@ langBtn.addEventListener('click', () => renderLanguageSelect());
 
 // ---------- SPEICHER (Google-Backend) ----------
 const API_URL = 'https://script.google.com/macros/s/AKfycbzmk5wZF_2Wc2kkFdom67YpN1d7Iyctf1iBEuz4HDM9LI1Ky9z9zgILJZTXdiD13r0J/exec';
+// Eigene Test-Bereitstellung des Google-Skripts (nur für den Test-Link ?test=1). Leer = gleiche wie live.
+const TEST_API_URL = '';
 const API_KEY = 'ws-WY1B1F6lTkNb8gmS';
 const API_TTL = 5 * 60 * 1000;
 // Testumgebung: Link mit ?test=1 -> eigene Testdaten, Mails nur an Daniel
@@ -353,7 +355,8 @@ function ensureTestReady() {
 const apiCache = {};
 const apiPending = {};
 let SERVER_GOALS = false;   // true, sobald das Google-Skript Lerntage/1-2-7 kennt
-function apiConfigured() { return /^https:\/\//.test(API_URL) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(API_URL); }
+function apiUrl() { return (TEST_MODE && TEST_API_URL) ? TEST_API_URL : API_URL; }
+function apiConfigured() { return /^https:\/\//.test(apiUrl()) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(apiUrl()); }
 function setApiWarning(msg) {
   const b = document.getElementById('apiWarn');
   if (!b) return;
@@ -362,7 +365,7 @@ function setApiWarning(msg) {
 }
 async function apiGet(params) {
   const qs = new URLSearchParams(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test' } : {}, params)).toString();
-  const res = await fetch(API_URL + '?' + qs, { method: 'GET', redirect: 'follow' });
+  const res = await fetch(apiUrl() + '?' + qs, { method: 'GET', redirect: 'follow' });
   const data = await res.json();
   if (!data || !data.ok) throw new Error((data && data.error) || 'Fehler');
   if (TEST_MODE && data.mode !== 'test') throw new Error('test_not_ready');
@@ -370,7 +373,7 @@ async function apiGet(params) {
 }
 async function apiPost(body) {
   await ensureTestReady();   // Sicherung: nie Testabgaben in Christophers Daten schreiben
-  const res = await fetch(API_URL, {
+  const res = await fetch(apiUrl(), {
     method: 'POST', redirect: 'follow',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(Object.assign({ key: API_KEY }, TEST_MODE ? { mode: 'test', simDate: simDate() } : {}, body)),
