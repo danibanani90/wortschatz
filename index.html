@@ -1032,12 +1032,18 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
 }
 
 // Wie sicher sind die Wörter? Jedes Wort zählt gleich viel, nie geübte Wörter zählen als 0 %.
+// Pro Wort zählen die letzten 3 Antworten (ältere Daten ohne "recent": Gesamtbilanz).
+function wordSureness(s) {
+  if (!s) return null;
+  if (Array.isArray(s.recent) && s.recent.length) return s.recent.filter(Boolean).length / s.recent.length;
+  const n = (s.correct || 0) + (s.wrong || 0);
+  return n > 0 ? (s.correct || 0) / n : null;
+}
 function wordsMastery(words, statsMap) {
   let sum = 0, practiced = 0;
   words.forEach(w => {
-    const s = statsMap[w.wid];
-    const n = s ? (s.correct || 0) + (s.wrong || 0) : 0;
-    if (n > 0) { practiced++; sum += (s.correct || 0) / n; }
+    const v = wordSureness(statsMap[w.wid]);
+    if (v !== null) { practiced++; sum += v; }
   });
   if (!practiced) return null;
   return { pct: Math.round((100 * sum) / words.length), practiced, total: words.length };
@@ -1691,7 +1697,7 @@ async function doSubmit(session) {
     submission,
     stats: classified.map(w => {
       const c = w.results.filter(Boolean).length;
-      return { collection: w.statsCollection || cfg.statsCollection, wid: w.wid, foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, correct: c, wrong: w.results.length - c };
+      return { collection: w.statsCollection || cfg.statsCollection, wid: w.wid, foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, correct: c, wrong: w.results.length - c, results: w.results };
     }),
     dolphinKey: key,
     dolphinClaim: !!(key && sc.ok),
