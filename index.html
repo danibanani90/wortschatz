@@ -593,10 +593,28 @@ async function fetchStatsMap(cfg) {
 
 // Baut einen gewichteten Wortpool aus den Kapiteln [0, upTo) eines Buches.
 // src: { chapters, statsCollection, statsMap, bookLabel (nur bei Vorgängerbuch) }
-function buildPool(src, upTo, foreignField) {
+
+// Wiederholungswörter: frühere Lektionen des aktuellen Buches + (falls vorhanden)
+// abgeschlossene Vorgängerbücher (z. B. Green Line 1 beim Lernen von Green Line 2).
+
+// Abgeschlossene Vorgängerbücher derselben Sprache (mit ihren Statistiken).
+// Welche Lektionen hat Chris schon selbst als Abfrage eingereicht? (aus dem Blatt "Ergebnisse")
+// null = unbekannt (altes Google-Skript) -> bisheriges Verhalten.
+function practicedLessons() {
+  const ld = apiCache.learningDays && apiCache.learningDays.docs && apiCache.learningDays.docs.list;
+  if (!Array.isArray(ld)) return null;
+  const set = new Set();
+  ld.forEach(r => { if (r && r.lesson) set.add((r.lang || '') + '|' + (r.book || '') + '|' + r.lesson); });
+  return set;
+}
+function isPracticed(set, langKey, bookLabel, title) { return set.has(langKey + '|' + (bookLabel || '') + '|' + title); }
+
+// Baut einen gewichteten Wortpool aus den Kapiteln, für die include(ci, ch) true ist.
+// src: { chapters, statsCollection, statsMap, bookLabel (nur bei Vorgängerbuch) }
+function buildPool(src, include, foreignField) {
   const pool = [];
-  for (let ci = 0; ci < upTo; ci++) {
-    const ch = src.chapters[ci];
+  src.chapters.forEach((ch, ci) => {
+    if (!include(ci, ch)) return;
     ch.words.forEach(w => {
       const s = src.statsMap[w.wid];
       const wrong = s ? (s.wrong || 0) : 0;
@@ -609,17 +627,24 @@ function buildPool(src, upTo, foreignField) {
         srcTitle: src.bookLabel ? (src.bookLabel + ' · ' + ch.title) : ch.title,
       });
     });
-  }
+  });
   return pool;
 }
 
-// Wiederholungswörter: frühere Lektionen des aktuellen Buches + (falls vorhanden)
-// abgeschlossene Vorgängerbücher (z. B. Green Line 1 beim Lernen von Green Line 2).
+// Wiederholungswörter: NUR aus Lektionen, die Chris schon selbst eingereicht hat
+// (aktuelles Buch + abgeschlossene Vorgängerbücher). Anfangs sind es dadurch weniger als 20.
 function pickExtraWords(cfg, chapterIdx, statsMap, prevBooks) {
   const n = EXTRA_WORD_COUNT;
-  const samePool = buildPool({ chapters: cfg.chapters, statsCollection: cfg.statsCollection, statsMap }, chapterIdx, cfg.foreignField);
+  const done = practicedLessons();
+  const sameInclude = done
+    ? (ci, ch) => ci !== chapterIdx && isPracticed(done, cfg.key, cfg.bookLabel, ch.title)
+    : (ci) => ci < chapterIdx;   // altes Google-Skript: wie bisher
+  const samePool = buildPool({ chapters: cfg.chapters, statsCollection: cfg.statsCollection, statsMap }, sameInclude, cfg.foreignField);
   let prevPool = [];
-  (prevBooks || []).forEach(pb => { prevPool = prevPool.concat(buildPool(pb, pb.chapters.length, cfg.foreignField)); });
+  (prevBooks || []).forEach(pb => {
+    const inc = done ? (ci, ch) => isPracticed(done, cfg.key, pb.bookLabel, ch.title) : () => true;
+    prevPool = prevPool.concat(buildPool(pb, inc, cfg.foreignField));
+  });
 
   if (!prevPool.length) return weightedSample(samePool, n);
   if (!samePool.length) return weightedSample(prevPool, n);
@@ -632,7 +657,6 @@ function pickExtraWords(cfg, chapterIdx, statsMap, prevBooks) {
   return weightedSample(prevPool, nPrev).concat(weightedSample(samePool, nSame));
 }
 
-// Abgeschlossene Vorgängerbücher derselben Sprache (mit ihren Statistiken).
 async function loadPrevBooks(langKey, bookIdx) {
   const lang = LANGS[langKey];
   if (!lang.books || bookIdx == null) return [];
@@ -1226,9 +1250,9 @@ function renderChapter(idx) {
   ]);
   const prevDone = (LANGS[cfg.key].books && currentBook != null) ? LANGS[cfg.key].books.slice(0, currentBook).filter(b => b.completed).map(b => b.label) : [];
   if (prevDone.length) {
-    actions.appendChild(el('span', { class: 'pill book' }, '+ ' + EXTRA_WORD_COUNT + ' Wiederholungswörter aus ' + prevDone.join(', ') + (idx > 0 ? ' & früheren Lektionen' : '')));
-  } else if (idx > 0) {
-    actions.appendChild(el('span', { class: 'pill old' }, '+ ' + EXTRA_WORD_COUNT + ' Wörter aus früheren Kapiteln'));
+    actions.appendChild(el('span', { class: 'pill book' }, '+ bis zu ' + EXTRA_WORD_COUNT + ' Wiederholungswörter aus deinen schon geübten Lektionen (auch ' + prevDone.join(', ') + ')'));
+  } else {
+    actions.appendChild(el('span', { class: 'pill old' }, '+ bis zu ' + EXTRA_WORD_COUNT + ' Wiederholungswörter aus deinen schon geübten Lektionen'));
   }
 
   const table = el('table', { class: 'vocab-table' }, [
@@ -1250,7 +1274,7 @@ async function startQuiz(chapterIdx) {
   app.appendChild(el('div', { class: 'card center-col' }, [el('div', { class: 'big-check' }, 'Wird vorbereitet …')]));
 
   const chapter = cfg.chapters[chapterIdx];
-  await apiList([cfg.statsCollection].concat((LANGS[cfg.key].books || []).map(b => b.statsCollection)));
+  await apiList([cfg.statsCollection, 'learningDays'].concat((LANGS[cfg.key].books || []).map(b => b.statsCollection)));
   const statsMap = await fetchStatsMap(cfg);
   const prevBooks = await loadPrevBooks(cfg.key, currentBook);
   const extraWords = pickExtraWords(cfg, chapterIdx, statsMap, prevBooks);
@@ -1313,6 +1337,8 @@ function resumeProgress(d) {
     renderQuizQuestion(s, a);
   } else if (d.phase === 'result') {
     renderAttemptResult(s, d.extra);
+  } else if (d.phase === 'sentences') {
+    renderSentences(s);
   } else if (d.phase === 'submit') {
     sendSubmission(cfgFor(s.lang, s.bookIdx), s, d.extra.classified, d.extra.payload);
   }
@@ -1327,6 +1353,7 @@ function resumeCard() {
   if (d.phase === 'quiz') while (nextPos < d.extra.order.length && d.extra.correctThisAttempt[d.extra.order[nextPos].wid] !== undefined) nextPos++;
   if (d.phase === 'quiz') where = 'Frage ' + Math.min(nextPos + 1, d.extra.order.length) + ' von ' + d.extra.order.length + ' · Versuch ' + s.attempt + ' von ' + s.maxAttempts;
   else if (d.phase === 'result') where = 'Versuch ' + s.attempt + ' ist fertig – noch nicht eingereicht';
+  else if (d.phase === 'sentences') where = 'Fast fertig – Satz-Training ' + Math.min((s.sentences || []).filter(x => x.done).length + 1, (s.sentences || []).length) + ' von ' + (s.sentences || []).length;
   else where = 'Fertig – muss nur noch eingereicht werden';
   const buttons = [el('button', { class: 'primary', onclick: () => resumeProgress(d) }, d.phase === 'submit' ? 'Jetzt einreichen' : 'Weitermachen')];
   if (d.phase !== 'submit') buttons.push(el('button', { onclick: (ev) => { clearProgress(); const c = ev.target.closest('.card'); if (c) c.remove(); } }, 'Verwerfen'));
@@ -1501,7 +1528,138 @@ function classifyWord(results) {
   return { level: 'warn', label: '(' + wrong + ' x falsch / ' + correct + ' x richtig)' };
 }
 
-async function submitSession(session) {
+// ===================== SATZ-TRAINING (zählt nicht für den Delfin) =====================
+const LT_URL = 'https://api.languagetool.org/v2/check';
+function sentenceWordCore(foreign) {
+  // "to give, gave" -> "give"; "skates (pl)" -> "skates"; "un ami/une amie" -> "ami"
+  let t = String(foreign || '').split(';')[0].replace(/\([^)]*\)/g, ' ').split(',')[0].split('/')[0];
+  t = t.replace(/…|\.\.\./g, ' ').replace(/^\s*(to|the|a|an|le|la|les|l'|un|une|des|du)\s+/i, '').trim();
+  return t.toLowerCase();
+}
+function pickSentenceWords(session) {
+  const lesson = session.chapterWords.map(w => session.tally[w.wid]).filter(Boolean);
+  const short = lesson.filter(t => String(t.foreign).split(/\s+/).length <= 4);
+  const base = short.length >= 3 ? short : lesson;
+  const wrong = shuffle(base.filter(t => t.results.some(r => !r)));
+  const right = shuffle(base.filter(t => !t.results.some(r => !r)));
+  let chosen = wrong.slice(0, 3).concat(right).slice(0, 3);
+  if (chosen.length < 3) {   // sehr kurze Lektion: mit Wiederholungswörtern aus dem aktuellen Buch auffüllen
+    const extra = shuffle(session.extraWords.map(w => session.tally[w.wid]).filter(t => t && !t.srcBook && !chosen.includes(t)));
+    chosen = chosen.concat(extra).slice(0, 3);
+  }
+  return chosen.map(t => ({ wid: t.wid, word: t.foreign, de: t.de, wasWrong: t.results.some(r => !r),
+    first: null, firstIssues: null, final: null, finalIssues: null, checks: 0, checked: false, done: false }));
+}
+function mapLtMatches(data, text) {
+  return ((data && data.matches) || []).slice(0, 8).map(m => ({
+    part: text.substr(m.offset, m.length), offset: m.offset, length: m.length,
+    message: m.message || m.shortMessage || '',
+    suggestions: (m.replacements || []).slice(0, 2).map(r => r.value),
+  }));
+}
+async function checkSentence(text, langKey) {
+  const language = langKey === 'fr' ? 'fr' : 'en-GB';
+  try {   // direkt vom Gerät aus (bevorzugt)
+    const res = await fetch(LT_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ text, language }).toString() });
+    if (!res.ok) throw new Error('lt_' + res.status);
+    return mapLtMatches(await res.json(), text);
+  } catch (e) {
+    try {   // Ersatzweg über das Google-Skript
+      const r = await apiPost({ action: 'check', text, language });
+      return mapLtMatches(r.result, text);
+    } catch (e2) { return null; }
+  }
+}
+function issuesEl(text, issues) {
+  if (!issues) return el('div', { class: 'feedback', style: 'color:var(--ink-soft);' }, 'Die Prüfung ist gerade nicht erreichbar – kein Problem, dein Satz wird trotzdem gespeichert.');
+  if (!issues.length) return el('div', { class: 'feedback good' }, '✓ Super – keine Rechtschreib- oder Grammatikfehler gefunden!');
+  return el('div', { style: 'display:flex;flex-direction:column;gap:6px;text-align:left;width:100%;' }, [
+    el('div', { style: 'font-weight:700;color:var(--warn);' }, '🔍 Das solltest du dir nochmal anschauen:'),
+    ...issues.map(i => el('div', { class: 'dol-note', style: 'background:var(--warn-bg);text-align:left;' }, [
+      el('span', { style: 'font-weight:700;text-decoration:underline wavy var(--bad);' }, i.part || '…'),
+      i.suggestions.length ? el('span', {}, ' → besser: „' + i.suggestions.join('“ oder „') + '“') : null,
+      el('div', { style: 'font-size:12px;color:var(--ink-soft);margin-top:3px;' }, i.message),
+    ])),
+  ]);
+}
+function renderSentences(session) {
+  const cfg = cfgFor(session.lang, session.bookIdx);
+  const list = session.sentences;
+  const idx = list.findIndex(x => !x.done);
+  if (idx < 0) { session.sentencesDone = true; saveProgress('sentences', session); return doSubmit(session); }
+  const it = list[idx];
+  homeBtn.hidden = false; langBtn.hidden = false;
+  crumb.textContent = session.chapterTitle + ' · Satz-Training';
+  app.innerHTML = '';
+  const langAdj = cfg.key === 'fr' ? 'französischen' : 'englischen';
+  const input = el('textarea', { id: 'sentenceInput', rows: '3', placeholder: 'Dein Satz …', autocapitalize: 'sentences', spellcheck: 'false',
+    style: 'width:100%;font-size:17px;font-family:inherit;padding:12px 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);resize:vertical;' });
+  input.value = it.final || it.first || '';
+  const result = el('div', { style: 'width:100%;display:flex;flex-direction:column;gap:8px;align-items:center;' });
+  const hint = el('div', { class: 'quiz-sub', style: 'color:var(--warn);' });
+  const checkBtn = el('button', { class: 'primary' }, 'Prüfen');
+  const nextBtn = el('button', { class: 'primary', hidden: true }, idx === list.length - 1 ? 'Fertig – Ergebnis einreichen' : 'Nächster Satz');
+  const finish = () => { it.done = true; saveProgress('sentences', session); renderSentences(session); };
+  nextBtn.addEventListener('click', finish);
+  const showAfterCheck = (issues) => {
+    result.innerHTML = '';
+    result.appendChild(issuesEl(input.value.trim(), issues));
+    nextBtn.hidden = false;
+    if (issues && issues.length && it.checks < 2) {
+      checkBtn.textContent = 'Verbessert – nochmal prüfen';
+      checkBtn.hidden = false;
+      result.appendChild(el('div', { class: 'quiz-sub' }, 'Du kannst deinen Satz oben verbessern und noch einmal prüfen – oder einfach weitermachen.'));
+    } else { checkBtn.hidden = true; input.readOnly = true; }
+  };
+  checkBtn.addEventListener('click', async () => {
+    const text = input.value.trim().replace(/\s+/g, ' ');
+    if (text.split(' ').filter(Boolean).length < 3) { hint.textContent = 'Schreib bitte einen ganzen Satz (mindestens 3 Wörter).'; return; }
+    const core = sentenceWordCore(it.word);
+    const stem = core.split(' ')[0].slice(0, Math.max(3, Math.min(5, core.split(' ')[0].length)));
+    it.wordUsed = !stem || text.toLowerCase().includes(stem);
+    hint.textContent = it.wordUsed ? '' : 'Tipp: Kommt „' + it.word + '“ in deinem Satz vor?';
+    checkBtn.disabled = true; checkBtn.textContent = 'Wird geprüft …';
+    const issues = await checkSentence(text, cfg.key);
+    checkBtn.disabled = false;
+    it.checks++;
+    if (it.checks === 1) { it.first = text; it.firstIssues = issues; }
+    it.final = text; it.finalIssues = issues; it.checked = issues !== null;
+    saveProgress('sentences', session);
+    showAfterCheck(issues);
+  });
+  app.appendChild(el('div', { class: 'card center-col' }, [
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+      el('span', { class: 'pill old' }, '✍️ Satz ' + (idx + 1) + ' von ' + list.length),
+      el('span', { class: 'pill' }, 'Training – zählt nicht für deinen Delfin'),
+    ]),
+    el('div', { class: 'quiz-sub' }, 'Fast geschafft! Bilde einen ' + langAdj + ' Satz mit diesem Wort:'),
+    el('div', { class: 'quiz-prompt' }, it.word),
+    el('div', { class: 'quiz-sub' }, '(' + it.de + ')'),
+    input,
+    hint,
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [checkBtn, nextBtn]),
+    result,
+    el('div', { style: 'font-size:11px;color:var(--ink-soft);' }, [
+      'Rechtschreib- und Grammatikprüfung: ',
+      el('a', { href: 'https://languagetool.org', target: '_blank', rel: 'noopener' }, 'LanguageTool'),
+      ' – dein Satz wird dafür an LanguageTool geschickt (ohne deinen Namen). Ob der Satz Sinn ergibt, prüft das Programm nicht.',
+    ]),
+  ]));
+  if (it.checks > 0) showAfterCheck(it.finalIssues);
+  setTimeout(() => { if (!input.readOnly) input.focus(); }, 30);
+}
+
+function submitSession(session) {
+  if (!session.sentencesDone) {
+    if (!session.sentences) session.sentences = pickSentenceWords(session);
+    if (session.sentences.length) { saveProgress('sentences', session); return renderSentences(session); }
+    session.sentencesDone = true;
+  }
+  return doSubmit(session);
+}
+
+async function doSubmit(session) {
   const cfg = cfgFor(session.lang, session.bookIdx);
   const wordsWithResults = Object.values(session.tally).filter(w => w.results.length > 0);
   const classified = wordsWithResults.map(w => ({ ...w, ...classifyWord(w.results) }));
@@ -1524,6 +1682,8 @@ async function submitSession(session) {
     submittedAt: new Date().toISOString(),
     nephewName: NEPHEW_NAME,
     words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], level: w.level, label: w.label })),
+    sentences: (session.sentences || []).map(x => ({ word: x.word, de: x.de, wasWrong: x.wasWrong, first: x.first, final: x.final, wordUsed: x.wordUsed !== false,
+      firstIssues: x.firstIssues, finalIssues: x.finalIssues, checked: x.checked })),
   };
   const payload = {
     action: 'submit',
