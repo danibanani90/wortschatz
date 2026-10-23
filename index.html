@@ -419,6 +419,7 @@ function dirLabel(dir, cfg) { return dir === 'f2de' ? (cfg.label + ' → DE') : 
 function normalize(str) {
   return (str || '')
     .toLowerCase()
+    .replace(/[«»„“”"]/g, ' ')   // Anführungszeichen sind freiwillig
     .replace(/[´`’‘ʼ]/g, "'")
     .replace(/[!?]/g, '')
     .replace(/[\s…\.]+$/g, '')
@@ -575,6 +576,33 @@ function checkAnswer(userInput, word) {
   if (word.quizDir === 'f2de') { const noApo = (x) => x.replace(/'/g, ''); return accepted.map(noApo).includes(noApo(given)); }
   return false;
 }
+// Französisch: Lag der Fehler nur an Akzenten/Sonderzeichen? ("ca va" statt "ça va", "soeur" statt "sœur")
+const foldChar = (c) => c === 'œ' ? 'oe' : c === 'æ' ? 'ae' : c.normalize('NFD').replace(/\p{M}/gu, '');
+const foldStr = (s) => [...s].map(foldChar).join('');
+function accentOnlyDiff(userInput, word) {
+  if (word.quizDir === 'f2de') return null;
+  const given = canon(normalize(userInput));
+  const fg = foldStr(given);
+  const target = acceptableAnswers(word.foreign).find(a => a !== given && foldStr(a) === fg);
+  if (!target) return null;
+  const g = [...given], gStart = []; let p = 0;
+  g.forEach(c => { gStart.push(p); p += foldChar(c).length; });
+  const diffs = []; p = 0;
+  for (const c of target) {
+    const len = foldChar(c).length;
+    const got = g.filter((_, i) => gStart[i] >= p && gStart[i] < p + len).join('');
+    if (got !== c && !diffs.some(d => d.want === c && d.got === got)) diffs.push({ want: c, got });
+    p += len;
+  }
+  return diffs.length ? diffs : null;
+}
+function accentHintText(diffs) {
+  const what = diffs.map(d => '„' + d.want + '“ statt „' + (d.got || '–') + '“').join(' und ');
+  const keys = [...new Set(diffs.map(d => d.want === 'œ' ? 'o' : foldStr(d.want).charAt(0)))].map(k => 'das ' + k);
+  return 'Fast! Hier gehört ' + what + ' hin. Tipp: Halte auf der Tastatur ' + keys.join(' bzw. ') +
+    ' lange gedrückt und wähle das richtige Zeichen. Verbessere dein Wort und prüfe nochmal.';
+}
+
 function promptWord(word) { return word.quizDir === 'f2de' ? word.foreign : word.de; }
 function answerWord(word) { return word.quizDir === 'f2de' ? word.de : word.foreign; }
 
@@ -1324,7 +1352,7 @@ async function startQuiz(chapterIdx) {
     statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle }));
 
   const tally = {};
-  chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [] }); });
+  chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
 
   const session = {
     lang: cfg.key,
@@ -1437,18 +1465,47 @@ function renderQuizQuestion(session, attemptState) {
   const input = el('input', { type: 'text', id: 'answerInput', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: word.quizDir === 'f2de' ? 'Deutsche Übersetzung …' : (cfg.adjInto + ' Übersetzung …') });
 
   let answered = false;
+  let fixing = false;   // Korrekturrunde, wenn nur ein Akzent/Sonderzeichen falsch war (zählt nicht)
 
   const submitAnswer = () => {
     if (answered) return;
     const val = input.value;
     if (!val.trim()) return;
-    answered = true;
-    const correct = checkAnswer(val, word);
+    const notes = attemptState.notes = attemptState.notes || {};
+    if (fixing) {
+      answered = true;
+      const ok = checkAnswer(val, word);
+      notes[word.wid] = ok ? 'accent-fixed' : 'accent';
+      saveProgress('quiz', session, attemptState);
+      feedback.style.color = '';
+      feedback.textContent = ok ? '✓ Genau so! Merk dir das Zeichen – diesmal zählt das Wort noch als Fehler.' : ('✗ Richtig wäre: ' + answerWord(word));
+      feedback.className = 'feedback ' + (ok ? 'good' : 'bad');
+      return lockAnswer();
+    }
+    let correct = checkAnswer(val, word);
+    if (notes[word.wid]) correct = false;   // nach Neuladen während der Korrektur bleibt es ein Fehler
     attemptState.correctThisAttempt[word.wid] = correct;
     (attemptState.answers = attemptState.answers || {})[word.wid] = val.trim();
+    const diffs = (!correct && session.lang === 'fr' && !notes[word.wid]) ? accentOnlyDiff(val, word) : null;
+    if (diffs) {
+      notes[word.wid] = 'accent';
+      saveProgress('quiz', session, attemptState);
+      fixing = true;
+      feedback.textContent = accentHintText(diffs);
+      feedback.className = 'feedback';
+      feedback.style.color = 'var(--warn)';
+      checkBtn.textContent = 'Verbessert – prüfen';
+      nextBtn.hidden = false;
+      setTimeout(() => input.focus(), 30);
+      return;
+    }
+    answered = true;
     saveProgress('quiz', session, attemptState);
     feedback.textContent = correct ? '✓ Richtig!' : ('✗ Richtig wäre: ' + answerWord(word));
     feedback.className = 'feedback ' + (correct ? 'good' : 'bad');
+    lockAnswer();
+  };
+  const lockAnswer = () => {
     input.disabled = true;
     checkBtn.hidden = true;
     nextBtn.hidden = false;
@@ -1458,7 +1515,7 @@ function renderQuizQuestion(session, attemptState) {
   };
 
   const goNext = () => {
-    if (!answered) return;
+    if (!answered && !fixing) return;
     attemptState.pos++;
     saveProgress('quiz', session, attemptState);
     renderQuizQuestion(session, attemptState);
@@ -1494,11 +1551,12 @@ function finishAttempt(session, attemptState) {
     session.tally[w.wid].results.push(!!wasCorrect);
     const t = session.tally[w.wid];
     (t.inputs = t.inputs || []).push((attemptState.answers && attemptState.answers[w.wid]) || '');
+    (t.notes = t.notes || []).push((attemptState.notes && attemptState.notes[w.wid]) || '');
     if (w.isOld && wasCorrect) session.extraStillNeeded.delete(w.wid);
   });
   const counted0 = attemptState.order.filter(w => !w.srcBook);
   session.attemptScores.push({ attempt: session.attempt, correct: counted0.filter(w => attemptState.correctThisAttempt[w.wid]).length, total: counted0.length });
-  const view = { order: attemptState.order, correctThisAttempt: attemptState.correctThisAttempt, answers: attemptState.answers || {} };
+  const view = { order: attemptState.order, correctThisAttempt: attemptState.correctThisAttempt, answers: attemptState.answers || {}, notes: attemptState.notes || {} };
   saveProgress('result', session, view);
   renderAttemptResult(session, view);
 }
@@ -1530,7 +1588,8 @@ function renderAttemptResult(session, attemptState) {
         el('span', { class: 'en' }, w.foreign),
         el('span', { class: 'de' }, w.de),
         w.isOld ? el('span', { class: 'pill ' + (w.srcBook ? 'book' : 'old') }, (w.srcBook ? '📗 ' : '') + w.srcTitle) : null,
-        (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“') : null,
+        (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“' +
+          ((attemptState.notes || {})[w.wid] ? ' – nur Akzent/Sonderzeichen' + ((attemptState.notes || {})[w.wid] === 'accent-fixed' ? ', danach richtig verbessert 👍' : '') : '')) : null,
       ]),
       el('span', { class: 'pill ' + (c ? 'good' : 'bad') }, c ? 'richtig' : 'falsch'),
     ]);
@@ -1720,7 +1779,7 @@ async function doSubmit(session) {
     attemptsUsed: session.attempt,
     submittedAt: new Date().toISOString(),
     nephewName: NEPHEW_NAME,
-    words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], level: w.level, label: w.label })),
+    words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], notes: w.notes || [], level: w.level, label: w.label })),
     sentences: (session.sentences || []).map(x => ({ word: x.word, de: x.de, wasWrong: x.wasWrong, first: x.first, final: x.final, wordUsed: x.wordUsed !== false,
       firstIssues: x.firstIssues, finalIssues: x.finalIssues, checked: x.checked })),
   };
