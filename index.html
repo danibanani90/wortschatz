@@ -444,7 +444,36 @@ function canon(s) {
     .replace(/\blet's\b/g, 'let us')
     .replace(/\b(he|she|it|that|there|here|what|who|where|how|when|why)'s\b/g, '$1 is')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/\b(sth|sb|smth|smb|jmdn|jmdm|jmds|jmd|etw)\./g, '$1')   // Abkürzungen: sth = something, jmdn. = jemanden ...
+    .replace(/\b(something|smth)\b/g, 'sth')
+    .replace(/\b(somebody|someone|smb)\b/g, 'sb')
+    .replace(/\bjemanden\b/g, 'jmdn').replace(/\bjemandem\b/g, 'jmdm').replace(/\bjemandes\b/g, 'jmds')
+    .replace(/\bjemand\b/g, 'jmd').replace(/\betwas\b/g, 'etw');
+}
+
+// Platzhalter wie "sth", "sb", "jmdn.", "etw." darf man auch weglassen ("to give sth a try" -> "to give a try").
+const OMITTABLE = new Set(['sth', 'sb', 'jmdn', 'jmdm', 'jmd', 'etw']);
+const HAS_PLACEHOLDER = /(^|[^\p{L}])(sth|sb|jmdn|jmdm|jmd|etw)(\.|[^\p{L}']|$)/u;
+function withoutPlaceholders(n) {
+  const toks = n.split(' ');
+  const idx = toks.map((t, i) => OMITTABLE.has(t.replace(/,$/, '')) ? i : -1).filter(i => i >= 0).slice(0, 4);
+  const out = [];
+  for (let mask = 1; mask < (1 << idx.length); mask++) {
+    const drop = new Set(idx.filter((_, k) => mask & (1 << k)));
+    const v = toks.filter((_, i) => !drop.has(i)).join(' ').replace(/\s*,\s*$/, '').trim();
+    if (v && hasLetter(v)) out.push(v);
+  }
+  return out;
+}
+
+// "sb/sth" bzw. "jmdn./etw." ist eine Wahl zwischen zwei Platzhaltern, keine Alternative für die ganze Wortgruppe.
+const PH_SLASH = /(^|\s)(sb|sth|jmdn\.?|jmdm\.?|jmd\.?|etw\.?)\/(sb|sth|jmdn\.?|jmdm\.?|jmd\.?|etw\.?)(?=[\s,]|$)/i;
+function splitPlaceholderSlash(seg) {
+  const m = seg.match(PH_SLASH);
+  if (!m) return [seg];
+  const at = m.index + m[1].length, len = m[0].length - m[1].length;
+  return [m[2], m[3]].flatMap(p => splitPlaceholderSlash(seg.slice(0, at) + p + seg.slice(at + len)));
 }
 
 const MAX_VARIANTS = 80;
@@ -531,8 +560,9 @@ function acceptableAnswers(text) {
     seg = seg.trim();
     if (!seg) return;
     const all = [seg];
-    try { expandVariants(seg).forEach(v => all.push(v)); } catch (e) { /* Rückfall: nur Originaltext */ }
-    all.forEach(v => { const n = canon(normalize(v)); if (n) out.add(n); });
+    try { splitPlaceholderSlash(seg).forEach(p => { all.push(p); expandVariants(p).forEach(v => all.push(v)); }); } catch (e) { /* Rückfall: nur Originaltext */ }
+    const omit = HAS_PLACEHOLDER.test(seg.toLowerCase());
+    all.forEach(v => { const n = canon(normalize(v)); if (!n) return; out.add(n); if (omit) withoutPlaceholders(n).forEach(x => out.add(x)); });
   });
   return [...out];
 }
