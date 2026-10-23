@@ -570,7 +570,10 @@ function checkAnswer(userInput, word) {
   const target = word.quizDir === 'f2de' ? word.de : word.foreign;
   const accepted = acceptableAnswers(target);
   const given = canon(normalize(userInput));
-  return accepted.includes(given);
+  if (accepted.includes(given)) return true;
+  // Deutsch: Apostroph ist freiwillig ("Wie geht's?" = "Wie gehts?"), auf Englisch/Französisch nicht (it's ≠ its)
+  if (word.quizDir === 'f2de') { const noApo = (x) => x.replace(/'/g, ''); return accepted.map(noApo).includes(noApo(given)); }
+  return false;
 }
 function promptWord(word) { return word.quizDir === 'f2de' ? word.foreign : word.de; }
 function answerWord(word) { return word.quizDir === 'f2de' ? word.de : word.foreign; }
