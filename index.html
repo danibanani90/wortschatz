@@ -420,6 +420,8 @@ function normalize(str) {
   return (str || '')
     .toLowerCase()
     .replace(/[«»„“”"]/g, ' ')   // Anführungszeichen sind freiwillig
+    .replace(/…|\.{2,}/g, ' ')    // Auslassungspunkte: "um … herum" = "um...herum" = "um herum"
+    .replace(/^[\s,]+/, '')
     .replace(/[´`’‘ʼ]/g, "'")
     .replace(/[!?]/g, '')
     .replace(/[\s…\.]+$/g, '')
