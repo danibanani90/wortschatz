@@ -1748,7 +1748,17 @@ function renderSentences(session) {
   setTimeout(() => { if (!input.readOnly) input.focus(); }, 30);
 }
 
+// Französisch: Satz-Training erst ab Lektion 4 (vorher reicht der Wortschatz noch nicht für eigene Sätze)
+const FR_SENTENCES_FROM_LESSON = 4;
+function sentencesEnabled(session) {
+  if (session.lang !== 'fr') return true;
+  const ch = (cfgFor(session.lang, session.bookIdx).chapters || [])[session.chapterIdx];
+  const m = ch && /Lektion\s+(\d+)/.exec(ch.group || ch.title || '');
+  return !m || Number(m[1]) >= FR_SENTENCES_FROM_LESSON;
+}
+
 function submitSession(session) {
+  if (!session.sentencesDone && !sentencesEnabled(session)) { session.sentences = []; session.sentencesDone = true; }
   if (!session.sentencesDone) {
     if (!session.sentences) session.sentences = pickSentenceWords(session);
     if (session.sentences.length) { saveProgress('sentences', session); return renderSentences(session); }
