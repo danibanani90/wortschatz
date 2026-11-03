@@ -611,6 +611,108 @@ function accentHintText(diffs, withPad) {
     ' lange gedrückt und wähle das richtige Zeichen. Verbessere dein Wort und prüfe nochmal.';
 }
 
+// Englisch: "Fast richtig"-Hinweise. Der Fehler zählt trotzdem, aber Chris darf einmal verbessern.
+// Gemeint richtig, aber nicht die Buch-Formulierung (aus den bisherigen Fehlern; key = englischer Eintrag)
+const NEAR_MEANING = {
+  'My name is …': { de: ['mein name ist'] },
+  'I live in …': { de: ['ich lebe in'] },
+  "What's your name?": { de: ['was ist dein name', 'wie ist dein name'] },
+  'See you!': { de: ['bis bald', 'bis später', 'bis spaeter'], en: ['see you later', 'see you soon'] },
+  'this': { de: ['das'] },
+  'Hello.': { en: ['hi'] },
+  'Hi.': { en: ['hello'] },
+  'bike': { en: ['bicycle'] },
+  'only': { de: ['nur'] },
+  'instead': { de: ['anstatt', 'statt'] },
+  'Who is it?': { en: ['who is this'] },
+  'What a mess!': { de: ['was eine unordnung', 'was für ein chaos', 'was für eine sauerei'] },
+  "can't": { de: ['ich kann nicht'] },
+  'home': { de: ['zu hause', 'zuhause'] },
+  'message': { en: ['news'] },
+  'news (sg)': { en: ['message'] },
+};
+const SMALL_WORDS = new Set(['to', 'in', 'on', 'at', 'of', 'from', 'for', 'with', 'a', 'an', 'the', 'up', 'out', 'off', 'what', 'by', 'about', 'into', 'is', 'are', 'am']);
+const AE_TO_BE = [[/\bcolor/g, 'colour'], [/\bfavorite/g, 'favourite'], [/\bpractice\b/g, 'practise'], [/\bcenter\b/g, 'centre'], [/\btheater\b/g, 'theatre'],
+  [/\bgray\b/g, 'grey'], [/\bmom\b/g, 'mum'], [/\bneighbor/g, 'neighbour'], [/\bfavor\b/g, 'favour'], [/\bhonor/g, 'honour'], [/\btraveled\b/g, 'travelled'], [/\bmeter\b/g, 'metre']];
+function rawVariants(text) {   // normalisiert, aber ohne Langform-Umwandlung (für Apostroph-Vergleich)
+  const out = new Set();
+  (text || '').split(';').forEach(seg => { seg = seg.trim(); if (!seg) return;
+    [seg].concat((() => { try { return expandVariants(seg); } catch (e) { return []; } })()).forEach(v => { const n = normalize(v); if (n) out.add(n); }); });
+  return [...out];
+}
+const NEAR_TEXT = {
+  meaning: 'Gemeint ist es richtig! 👍 Im Buch steht es aber anders – versuch es nochmal mit der Formulierung aus dem Buch.',
+  small: 'Fast! Da fehlt noch ein kleines Wort. Verbessere deine Antwort und prüfe nochmal.',
+  extra: 'Fast! Da ist ein kleines Wort zu viel. Verbessere deine Antwort und prüfe nochmal.',
+  space: 'Fast! Achte auf die Leerzeichen – schreibt man das zusammen oder getrennt? Verbessere und prüfe nochmal.',
+  apostrophe: "Fast! Da fehlt ein Apostroph ( ' ). Verbessere und prüfe nochmal.",
+  ae: 'Fast! Das ist amerikanisches Englisch – im Buch steht die britische Schreibweise. Verbessere und prüfe nochmal.',
+  article: 'Fast! Den Artikel (der/die/das) brauchst du hier nicht. Verbessere und prüfe nochmal.',
+};
+function englishNearMiss(userInput, word) {
+  const toDe = word.quizDir === 'f2de';
+  const given = canon(normalize(userInput));
+  if (!given) return null;
+  const near = NEAR_MEANING[word.foreign];
+  const list = near && (toDe ? near.de : near.en);
+  if (list && list.some(x => canon(normalize(x)) === given)) return 'meaning';
+  const accepted = acceptableAnswers(toDe ? word.de : word.foreign);
+  if (toDe) {
+    const noArt = given.replace(/^(der|die|das|ein|eine|einen) /, '');
+    if (noArt !== given && accepted.includes(noArt)) return 'article';
+    return null;
+  }
+  const squash = (x) => x.replace(/[\s-]+/g, '');
+  if (accepted.some(a => squash(a) === squash(given))) return 'space';
+  const rawGiven = normalize(userInput).replace(/'/g, '');
+  if (rawVariants(word.foreign).some(v => v.includes("'") && v.replace(/'/g, '') === rawGiven)) return 'apostrophe';
+  let be = given; AE_TO_BE.forEach(([re, to]) => { be = be.replace(re, to); });
+  if (be !== given && accepted.includes(be)) return 'ae';
+  const g = given.split(' ');
+  for (const a of accepted) {
+    const t = a.split(' ');
+    if (t.length === g.length + 1) { for (let i = 0; i < t.length; i++) if (SMALL_WORDS.has(t[i]) && t.slice(0, i).concat(t.slice(i + 1)).join(' ') === given) return 'small'; }
+    if (g.length === t.length + 1) { for (let i = 0; i < g.length; i++) if (SMALL_WORDS.has(g[i]) && g.slice(0, i).concat(g.slice(i + 1)).join(' ') === a) return 'extra'; }
+  }
+  return null;
+}
+const NOTE_LABEL = { accent: 'nur Akzent/Sonderzeichen', meaning: 'gemeint richtig, aber nicht die Buch-Formulierung', small: 'ein kleines Wort fehlte',
+  extra: 'ein kleines Wort zu viel', space: 'nur Leerzeichen/Zusammenschreibung', apostrophe: 'nur der Apostroph fehlte', ae: 'amerikanische statt britische Schreibweise', article: 'Artikel zu viel' };
+function noteLabel(n) {
+  if (!n) return '';
+  const fixed = /-fixed$/.test(n), kind = n.replace(/-fixed$/, '');
+  return (NOTE_LABEL[kind] || 'fast richtig') + (fixed ? ', danach richtig verbessert 👍' : '');
+}
+
+// Vorlesen (Sprachausgabe des Handys – es wird nichts ins Internet geschickt)
+const CAN_SPEAK = typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+function speakText(text) {
+  return String(text || '').split(';')[0]
+    .replace(/\([^)]*\)/g, ' ').replace(/[…]|\.{2,}/g, ' ')
+    .replace(/\bsth\b/g, 'something').replace(/\bsb\b/g, 'somebody')
+    .replace(/\s+/g, ' ').trim();
+}
+function speak(text, langKey) {
+  if (!CAN_SPEAK) return;
+  try {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(speakText(text));
+    const lang = langKey === 'fr' ? 'fr-FR' : 'en-GB';
+    u.lang = lang; u.rate = 0.85;
+    const voices = synth.getVoices() || [];
+    const v = voices.find(x => x.lang === lang) || voices.find(x => (x.lang || '').toLowerCase().startsWith(lang.slice(0, 2)));
+    if (v) u.voice = v;
+    synth.speak(u);
+  } catch (e) { /* Vorlesen ist nur ein Extra */ }
+}
+function speakBtn(text, langKey, label) {
+  if (!CAN_SPEAK) return null;
+  const b = el('button', { type: 'button', class: 'small', title: 'Vorlesen', 'aria-label': 'Vorlesen' }, label || '🔊');
+  b.addEventListener('click', (e) => { e.preventDefault(); speak(text, langKey); });
+  return b;
+}
+
 // Französisch: Knöpfe für Sonderzeichen unter dem Eingabefeld (immer dieselben, feste Reihenfolge)
 const FR_CHARS = ['é', 'è', 'ê', 'ë', 'à', 'â', 'ç', 'ô', 'œ', 'ù', 'û', 'î'];
 function charPad(input) {
@@ -1343,6 +1445,7 @@ function renderChapter(idx) {
 
   const actions = el('div', { class: 'toolbar' }, [
     el('button', { class: 'primary', onclick: () => startQuiz(idx) }, 'Abfrage starten'),
+    CAN_SPEAK ? el('button', { onclick: () => startDictation(idx) }, '🎧 Diktat') : null,
   ]);
   const prevDone = (LANGS[cfg.key].books && currentBook != null) ? LANGS[cfg.key].books.slice(0, currentBook).filter(b => b.completed).map(b => b.label) : [];
   if (prevDone.length) {
@@ -1361,6 +1464,70 @@ function renderChapter(idx) {
     actions,
     el('div', { style: 'overflow-x:auto;' }, table),
   ]));
+}
+
+// ---------- DIKTAT (Übung: hören und schreiben – zählt nicht für den Delfin, keine Mail) ----------
+function startDictation(chapterIdx) {
+  const cfg = langCfg();
+  const chapter = cfg.chapters[chapterIdx];
+  const words = shuffle(chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, quizDir: 'de2f' })));
+  renderDictation({ lang: cfg.key, bookIdx: currentBook, chapterIdx, title: chapter.title, words, pos: 0, results: [] });
+}
+function renderDictation(d) {
+  homeBtn.hidden = false; langBtn.hidden = false;
+  crumb.textContent = d.title + ' · Diktat';
+  app.innerHTML = '';
+  if (d.pos >= d.words.length) {
+    const ok = d.results.filter(r => r.ok).length;
+    const wrong = d.results.filter(r => !r.ok);
+    app.appendChild(el('div', { class: 'card center-col' }, [
+      el('div', { class: 'big-check' }, '🎧 ' + ok + ' von ' + d.words.length + ' richtig'),
+      el('div', { class: 'quiz-sub' }, wrong.length ? 'Diese Wörter schau dir nochmal an:' : 'Super – alles richtig geschrieben!'),
+      wrong.length ? el('div', { style: 'width:100%;' }, wrong.map(r => el('div', { class: 'wordline' }, [
+        el('div', { class: 'words' }, [el('span', { class: 'en' }, r.w.foreign), el('span', { class: 'de' }, r.w.de),
+          el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Du hast geschrieben: „' + r.given + '“')]),
+        speakBtn(r.w.foreign, d.lang),
+      ]))) : null,
+      el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+        el('button', { onclick: () => startDictation(d.chapterIdx) }, 'Nochmal'),
+        el('button', { class: 'primary', onclick: () => renderChapter(d.chapterIdx) }, 'Zur Lektion'),
+      ]),
+    ]));
+    return;
+  }
+  const w = d.words[d.pos];
+  const input = el('input', { type: 'text', id: 'answerInput', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'Schreib, was du hörst …' });
+  const pad = d.lang === 'fr' ? charPad(input) : null;
+  const feedback = el('div', { class: 'feedback', id: 'feedback' });
+  let answered = false;
+  const check = () => {
+    if (answered || !input.value.trim()) return;
+    answered = true;
+    const ok = checkAnswer(input.value, w);
+    d.results.push({ w, ok, given: input.value.trim() });
+    feedback.textContent = ok ? '✓ Richtig geschrieben!' : ('✗ Richtig: ' + w.foreign + ' (' + w.de + ')');
+    feedback.className = 'feedback ' + (ok ? 'good' : 'bad');
+    input.disabled = true; if (pad) pad.hidden = true;
+    checkBtn.hidden = true; nextBtn.hidden = false;
+    nextBtn.disabled = true; setTimeout(() => { nextBtn.disabled = false; }, 350);
+  };
+  const next = () => { if (!answered) return; d.pos++; renderDictation(d); if (d.pos < d.words.length) speak(d.words[d.pos].foreign, d.lang); };
+  const checkBtn = el('button', { class: 'primary', onclick: check }, 'Prüfen');
+  const nextBtn = el('button', { class: 'primary', hidden: true, onclick: next }, d.pos + 1 >= d.words.length ? 'Ergebnis anzeigen' : 'Weiter');
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (!answered) check(); else next(); } });
+  app.appendChild(el('div', { class: 'card center-col' }, [
+    el('div', { class: 'progress-row' }, [
+      el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: 'width:' + Math.round(100 * d.pos / d.words.length) + '%' })),
+      el('span', { style: 'font-size:12px;color:var(--ink-soft);white-space:nowrap;' }, (d.pos + 1) + ' / ' + d.words.length),
+    ]),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🎧 Diktat – Übung, zählt nicht für deinen Delfin')]),
+    el('div', { class: 'quiz-sub' }, 'Hör gut zu und schreib das ' + (d.lang === 'fr' ? 'französische' : 'englische') + ' Wort:'),
+    el('button', { class: 'primary', style: 'font-size:22px;padding:14px 26px;', onclick: () => speak(w.foreign, d.lang) }, '🔊 Anhören'),
+    input, pad,
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [checkBtn, nextBtn]),
+    feedback,
+  ]));
+  if (d.pos === 0) speak(w.foreign, d.lang);   // erstes Wort direkt abspielen (Klick auf "Diktat" zählt als Nutzer-Aktion)
 }
 
 // ---------- QUIZ ----------
@@ -1494,8 +1661,12 @@ function renderQuizQuestion(session, attemptState) {
   const input = el('input', { type: 'text', id: 'answerInput', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: word.quizDir === 'f2de' ? 'Deutsche Übersetzung …' : (cfg.adjInto + ' Übersetzung …') });
 
   const pad = (session.lang === 'fr' && word.quizDir !== 'f2de') ? charPad(input) : null;
+  // 🔊: Fremdwort als Frage -> sofort anhörbar; Fremdwort als Antwort -> erst nach dem Prüfen (verrät sonst die Lösung)
+  const sayPrompt = word.quizDir === 'f2de' ? speakBtn(word.foreign, session.lang) : null;
+  const sayAfter = word.quizDir !== 'f2de' ? speakBtn(word.foreign, session.lang, '🔊 Anhören') : null;
+  if (sayAfter) sayAfter.hidden = true;
   let answered = false;
-  let fixing = false;   // Korrekturrunde, wenn nur ein Akzent/Sonderzeichen falsch war (zählt nicht)
+  let fixing = false;   // Korrekturrunde bei "fast richtig" (Akzent, kleines Wort, Buch-Formulierung …) – zählt trotzdem als Fehler
 
   const submitAnswer = () => {
     if (answered) return;
@@ -1505,10 +1676,11 @@ function renderQuizQuestion(session, attemptState) {
     if (fixing) {
       answered = true;
       const ok = checkAnswer(val, word);
-      notes[word.wid] = ok ? 'accent-fixed' : 'accent';
+      const kind = String(notes[word.wid] || 'accent').replace(/-fixed$/, '');
+      notes[word.wid] = ok ? kind + '-fixed' : kind;
       saveProgress('quiz', session, attemptState);
       feedback.style.color = '';
-      feedback.textContent = ok ? '✓ Genau so! Merk dir das Zeichen – diesmal zählt das Wort noch als Fehler.' : ('✗ Richtig wäre: ' + answerWord(word));
+      feedback.textContent = ok ? ('✓ Genau so! ' + (kind === 'accent' ? 'Merk dir das Zeichen' : 'Merk dir das so') + ' – diesmal zählt das Wort noch als Fehler.') : ('✗ Richtig wäre: ' + answerWord(word));
       feedback.className = 'feedback ' + (ok ? 'good' : 'bad');
       return lockAnswer();
     }
@@ -1517,11 +1689,12 @@ function renderQuizQuestion(session, attemptState) {
     attemptState.correctThisAttempt[word.wid] = correct;
     (attemptState.answers = attemptState.answers || {})[word.wid] = val.trim();
     const diffs = (!correct && session.lang === 'fr' && !notes[word.wid]) ? accentOnlyDiff(val, word) : null;
-    if (diffs) {
-      notes[word.wid] = 'accent';
+    const nearKind = (!correct && !diffs && session.lang === 'en' && !notes[word.wid]) ? englishNearMiss(val, word) : null;
+    if (diffs || nearKind) {
+      notes[word.wid] = diffs ? 'accent' : nearKind;
       saveProgress('quiz', session, attemptState);
       fixing = true;
-      feedback.textContent = accentHintText(diffs, !!pad);
+      feedback.textContent = diffs ? accentHintText(diffs, !!pad) : NEAR_TEXT[nearKind];
       feedback.className = 'feedback';
       feedback.style.color = 'var(--warn)';
       checkBtn.textContent = 'Verbessert – prüfen';
@@ -1538,6 +1711,7 @@ function renderQuizQuestion(session, attemptState) {
   const lockAnswer = () => {
     input.disabled = true;
     if (pad) pad.hidden = true;
+    if (sayAfter) sayAfter.hidden = false;
     checkBtn.hidden = true;
     nextBtn.hidden = false;
     nextBtn.disabled = true; // kurze Sperre gegen Ghost-Clicks auf Touch-Geräten
@@ -1566,11 +1740,12 @@ function renderQuizQuestion(session, attemptState) {
     progress,
     tagRow,
     el('div', { class: 'quiz-sub' }, word.quizDir === 'f2de' ? 'Übersetze ins Deutsche' : ('Übersetze ins ' + cfg.adjInto)),
-    el('div', { class: 'quiz-prompt' }, promptWord(word)),
+    el('div', { class: 'quiz-prompt' }, sayPrompt ? [promptWord(word) + ' ', sayPrompt] : promptWord(word)),
     input,
     pad,
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [checkBtn, nextBtn]),
     feedback,
+    sayAfter,
   ]));
 
   setTimeout(() => input.focus(), 30);
@@ -1621,7 +1796,7 @@ function renderAttemptResult(session, attemptState) {
         el('span', { class: 'de' }, w.de),
         w.isOld ? el('span', { class: 'pill ' + (w.srcBook ? 'book' : 'old') }, (w.srcBook ? '📗 ' : '') + w.srcTitle) : null,
         (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“' +
-          ((attemptState.notes || {})[w.wid] ? ' – nur Akzent/Sonderzeichen' + ((attemptState.notes || {})[w.wid] === 'accent-fixed' ? ', danach richtig verbessert 👍' : '') : '')) : null,
+          ((attemptState.notes || {})[w.wid] ? ' – ' + noteLabel((attemptState.notes || {})[w.wid]) : '')) : null,
       ]),
       el('span', { class: 'pill ' + (c ? 'good' : 'bad') }, c ? 'richtig' : 'falsch'),
     ]);
