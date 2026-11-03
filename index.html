@@ -226,6 +226,8 @@ input[type=text] {
   border: 1.5px solid var(--line); background: var(--surface); color: var(--ink);
 }
 input[type=text]:focus { outline: none; border-color: var(--accent); }
+.charpad { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; width: 100%; max-width: 340px; }
+.charpad button { padding: 7px 0; min-height: 40px; font-size: 19px; line-height: 1; background: var(--surface-2); touch-action: manipulation; }
 .feedback { text-align: center; font-weight: 600; font-size: 15px; min-height: 20px; }
 .feedback.good { color: var(--good); }
 .feedback.bad { color: var(--bad); }
@@ -598,11 +600,36 @@ function accentOnlyDiff(userInput, word) {
   }
   return diffs.length ? diffs : null;
 }
-function accentHintText(diffs) {
+function accentHintText(diffs, withPad) {
   const what = diffs.map(d => '„' + d.want + '“ statt „' + (d.got || '–') + '“').join(' und ');
+  if (withPad) {
+    const chars = [...new Set(diffs.map(d => d.want))].map(c => '„' + c + '“');
+    return 'Fast! Hier gehört ' + what + ' hin. Tipp: Tippe unten auf ' + chars.join(' bzw. ') + '. Verbessere dein Wort und prüfe nochmal.';
+  }
   const keys = [...new Set(diffs.map(d => d.want === 'œ' ? 'o' : foldStr(d.want).charAt(0)))].map(k => 'das ' + k);
   return 'Fast! Hier gehört ' + what + ' hin. Tipp: Halte auf der Tastatur ' + keys.join(' bzw. ') +
     ' lange gedrückt und wähle das richtige Zeichen. Verbessere dein Wort und prüfe nochmal.';
+}
+
+// Französisch: Knöpfe für Sonderzeichen unter dem Eingabefeld (immer dieselben, feste Reihenfolge)
+const FR_CHARS = ['é', 'è', 'ê', 'ë', 'à', 'â', 'ç', 'ô', 'œ', 'ù', 'û', 'î'];
+function charPad(input) {
+  const insert = (ch) => {
+    if (input.disabled || input.readOnly) return;
+    const start = input.selectionStart ?? input.value.length, end = input.selectionEnd ?? start;
+    const before = input.value.slice(0, start);
+    const c = (input.tagName === 'TEXTAREA' && /(^|[.!?]\s+)$/.test(before)) ? ch.toUpperCase() : ch;   // Satzanfang: Ça
+    input.setRangeText(c, start, end, 'end');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  };
+  return el('div', { class: 'charpad', 'aria-label': 'Französische Sonderzeichen' }, FR_CHARS.map(ch => {
+    const b = el('button', { type: 'button', tabindex: '-1' }, ch);
+    // pointerdown + preventDefault: Eingabefeld behält den Fokus, die Handy-Tastatur bleibt offen
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); insert(ch); });
+    b.addEventListener('click', (e) => { if (e.detail === 0) insert(ch); });   // Tastatur/Screenreader
+    return b;
+  }));
 }
 
 function promptWord(word) { return word.quizDir === 'f2de' ? word.foreign : word.de; }
@@ -1466,6 +1493,7 @@ function renderQuizQuestion(session, attemptState) {
   const feedback = el('div', { class: 'feedback', id: 'feedback' });
   const input = el('input', { type: 'text', id: 'answerInput', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: word.quizDir === 'f2de' ? 'Deutsche Übersetzung …' : (cfg.adjInto + ' Übersetzung …') });
 
+  const pad = (session.lang === 'fr' && word.quizDir !== 'f2de') ? charPad(input) : null;
   let answered = false;
   let fixing = false;   // Korrekturrunde, wenn nur ein Akzent/Sonderzeichen falsch war (zählt nicht)
 
@@ -1493,7 +1521,7 @@ function renderQuizQuestion(session, attemptState) {
       notes[word.wid] = 'accent';
       saveProgress('quiz', session, attemptState);
       fixing = true;
-      feedback.textContent = accentHintText(diffs);
+      feedback.textContent = accentHintText(diffs, !!pad);
       feedback.className = 'feedback';
       feedback.style.color = 'var(--warn)';
       checkBtn.textContent = 'Verbessert – prüfen';
@@ -1509,6 +1537,7 @@ function renderQuizQuestion(session, attemptState) {
   };
   const lockAnswer = () => {
     input.disabled = true;
+    if (pad) pad.hidden = true;
     checkBtn.hidden = true;
     nextBtn.hidden = false;
     nextBtn.disabled = true; // kurze Sperre gegen Ghost-Clicks auf Touch-Geräten
@@ -1539,6 +1568,7 @@ function renderQuizQuestion(session, attemptState) {
     el('div', { class: 'quiz-sub' }, word.quizDir === 'f2de' ? 'Übersetze ins Deutsche' : ('Übersetze ins ' + cfg.adjInto)),
     el('div', { class: 'quiz-prompt' }, promptWord(word)),
     input,
+    pad,
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [checkBtn, nextBtn]),
     feedback,
   ]));
@@ -1696,6 +1726,7 @@ function renderSentences(session) {
   const input = el('textarea', { id: 'sentenceInput', rows: '3', placeholder: 'Dein Satz …', autocapitalize: 'sentences', spellcheck: 'false',
     style: 'width:100%;font-size:17px;font-family:inherit;padding:12px 14px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);resize:vertical;' });
   input.value = it.final || it.first || '';
+  const spad = cfg.key === 'fr' ? charPad(input) : null;
   const result = el('div', { style: 'width:100%;display:flex;flex-direction:column;gap:8px;align-items:center;' });
   const hint = el('div', { class: 'quiz-sub', style: 'color:var(--warn);' });
   const checkBtn = el('button', { class: 'primary' }, 'Prüfen');
@@ -1710,7 +1741,7 @@ function renderSentences(session) {
       checkBtn.textContent = 'Verbessert – nochmal prüfen';
       checkBtn.hidden = false;
       result.appendChild(el('div', { class: 'quiz-sub' }, 'Du kannst deinen Satz oben verbessern und noch einmal prüfen – oder einfach weitermachen.'));
-    } else { checkBtn.hidden = true; input.readOnly = true; }
+    } else { checkBtn.hidden = true; input.readOnly = true; if (spad) spad.hidden = true; }
   };
   checkBtn.addEventListener('click', async () => {
     const text = input.value.trim().replace(/\s+/g, ' ');
@@ -1737,6 +1768,7 @@ function renderSentences(session) {
     el('div', { class: 'quiz-prompt' }, it.word),
     el('div', { class: 'quiz-sub' }, '(' + it.de + ')'),
     input,
+    spad,
     hint,
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [checkBtn, nextBtn]),
     result,
