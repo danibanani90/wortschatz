@@ -154,6 +154,15 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .dol-waves { position:absolute; left:0; right:0; bottom:-6px; text-align:center; font-size:34px; line-height:1; letter-spacing:-2px; white-space:nowrap; z-index:2; animation: dolWave 1.8s ease-in-out infinite; }
 @keyframes dolWave { 0%,100%{transform:translateX(-6px)} 50%{transform:translateX(6px)} }
 .dol-spark { position:absolute; font-size:20px; animation: dolSpark 1.6s ease-in-out infinite; }
+@keyframes starPop { 0%{transform:scale(0) rotate(-90deg);opacity:0} 55%{transform:scale(1.5) rotate(15deg);opacity:1} 100%{transform:scale(1) rotate(0)} }
+.star-pop { font-size: 64px; animation: starPop .9s ease-out both; }
+.choice-grid { display: grid; grid-template-columns: 1fr; gap: 8px; width: 100%; max-width: 360px; }
+.choice-grid button { font-size: 18px; padding: 12px; text-align: center; }
+.choice-grid button.right { background: var(--good-bg); border-color: var(--good); color: var(--good); font-weight: 700; }
+.choice-grid button.wrong { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+.wcard { width: 100%; max-width: 360px; border: 1.5px solid var(--line); border-radius: 16px; padding: 22px 16px; text-align: center; background: var(--surface-2); }
+.wcard .fw { font-size: 28px; font-weight: 700; }
+.wcard .dw { font-size: 18px; color: var(--ink-soft); margin-top: 6px; }
 @keyframes dolSpark { 0%,100%{opacity:0;transform:scale(.4)} 50%{opacity:1;transform:scale(1.2)} }
 .dol-note { padding:12px 14px; border-radius:12px; background: var(--accent-soft); color: var(--ink); font-size:14px; text-align:center; width:100%; }
 .dol-summary { font-size:13px; color: var(--ink-soft); margin-bottom:10px; }
@@ -356,6 +365,7 @@ function ensureTestReady() {
 }
 const apiCache = {};
 const apiPending = {};
+let SERVER_PROBLEMS = false;   // true, sobald das Google-Skript Problemwörter ("besiegt") kennt
 let SERVER_GOALS = false;   // true, sobald das Google-Skript Lerntage/1-2-7 kennt
 function apiUrl() { return (TEST_MODE && TEST_API_URL) ? TEST_API_URL : API_URL; }
 function apiConfigured() { return /^https:\/\//.test(apiUrl()) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(apiUrl()); }
@@ -400,6 +410,7 @@ async function apiList(cols) {
     const p = apiGet({ action: 'list', collections: missing.join(',') })
       .then(data => {
         if (data.docs && data.docs.learningDays && Array.isArray(data.docs.learningDays.list)) SERVER_GOALS = true;
+        if (Array.isArray(data.features) && data.features.indexOf('problems') >= 0) SERVER_PROBLEMS = true;
         missing.forEach(c => { apiCache[c] = { at: Date.now(), docs: (data.docs && data.docs[c]) || {} }; });
         setApiWarning('');
       })
@@ -813,7 +824,7 @@ function buildPool(src, include, foreignField) {
       const correct = s ? (s.correct || 0) : 0;
       const weight = Math.max(0.4, 1 + 3 * wrong - 0.5 * correct);
       pool.push({
-        foreign: w[foreignField], de: w.de, wid: w.wid, chapterIdx: ci, weight,
+        foreign: w[foreignField], de: w.de, wid: w.wid, chapterIdx: ci, weight, problem: problemState_(s),
         statsCollection: src.statsCollection,
         srcBook: src.bookLabel || null,
         srcTitle: src.bookLabel ? (src.bookLabel + ' · ' + ch.title) : ch.title,
@@ -831,13 +842,30 @@ function pickExtraWords(cfg, chapterIdx, statsMap, prevBooks) {
   const sameInclude = done
     ? (ci, ch) => ci !== chapterIdx && isPracticed(done, cfg.key, cfg.bookLabel, ch.title)
     : (ci) => ci < chapterIdx;   // altes Google-Skript: wie bisher
-  const samePool = buildPool({ chapters: cfg.chapters, statsCollection: cfg.statsCollection, statsMap }, sameInclude, cfg.foreignField);
+  let samePool = buildPool({ chapters: cfg.chapters, statsCollection: cfg.statsCollection, statsMap }, sameInclude, cfg.foreignField);
   let prevPool = [];
   (prevBooks || []).forEach(pb => {
     const inc = done ? (ci, ch) => isPracticed(done, cfg.key, pb.bookLabel, ch.title) : () => true;
     prevPool = prevPool.concat(buildPool(pb, inc, cfg.foreignField));
   });
 
+  // Bis zu PROBLEM_SLOTS Plätze sind fest für Problemwörter reserviert (wichtigste zuerst), der Rest bleibt gemischt.
+  let reserved = [];
+  if (SERVER_PROBLEMS) {
+    reserved = sortProblems(samePool.concat(prevPool).filter(w => w.problem)).slice(0, PROBLEM_SLOTS)
+      .map(w => Object.assign({}, w, { isProblem: true }));
+    const taken = new Set(reserved.map(w => w.wid));
+    samePool = samePool.filter(w => !taken.has(w.wid));
+    prevPool = prevPool.filter(w => !taken.has(w.wid));
+  }
+  return reserved.concat(mixExtra(samePool, prevPool, n - reserved.length));
+}
+const PROBLEM_SLOTS = 5;
+function sortProblems(list) {   // wenigste richtige Tage zuerst, dann der jüngste Fehler zuerst
+  return list.slice().sort((a, b) => (a.problem.okDays - b.problem.okDays) || String(b.problem.lastWrongAt).localeCompare(String(a.problem.lastWrongAt)));
+}
+function mixExtra(samePool, prevPool, n) {
+  if (n <= 0) return [];
   if (!prevPool.length) return weightedSample(samePool, n);
   if (!samePool.length) return weightedSample(prevPool, n);
 
@@ -1031,6 +1059,20 @@ function nextDolphinDate_(doc) {
   if (n === 1) return gStr_(gDay_(last) + 1);
   return gStr_(Math.max(gDay_(first) + 7, gDay_(last) + 1));
 }
+// Problemwörter: Ein Wort mit Fehler ist ein Problemwort, bis es an PROBLEM_DAYS verschiedenen Tagen
+// (ohne neuen Fehler dazwischen) richtig beantwortet wurde – dann ist es "besiegt".
+const PROBLEM_DAYS = 3;
+function problemState_(doc) {
+  if (!doc) return null;
+  let lw = doc.lastWrongAt || null;
+  // Ältere Daten ohne Tagesverlauf: Fehler in den letzten Antworten zählen als offenes Problem
+  if (!lw && !Array.isArray(doc.okDays) && Array.isArray(doc.recent) && doc.recent.some(r => !r)) lw = doc.updatedAt || '1970-01-01';
+  if (!lw) return null;
+  if (doc.beatenAt && doc.beatenAt >= lw) return null;
+  const ok = Array.isArray(doc.okDays) ? doc.okDays.length : 0;
+  if (ok >= PROBLEM_DAYS) return null;
+  return { okDays: ok, lastWrongAt: lw };
+}
 // ===================== /ZIELE =====================
 
 // Heute (im Testmodus ggf. simuliert)
@@ -1223,6 +1265,76 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
   window.scrollTo(0, 0);
 }
 
+function renderBeatenCongrats(session, beaten, total, onNext) {
+  homeBtn.hidden = true; langBtn.hidden = true;
+  crumb.textContent = session.chapterTitle + ' · Problemwort besiegt!';
+  app.innerHTML = '';
+  app.appendChild(el('div', { class: 'card center-col dol-card' }, [
+    el('div', { class: 'star-pop' }, '⭐'),
+    el('div', { class: 'big-check' }, beaten.length === 1 ? 'Problemwort besiegt!' : beaten.length + ' Problemwörter besiegt!'),
+    el('div', { class: 'quiz-sub' }, 'An ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig – das sitzt jetzt, ' + NEPHEW_NICK + '! 💪'),
+    el('div', { style: 'width:100%;' }, beaten.map(b => el('div', { class: 'wordline' }, [
+      el('div', { class: 'words' }, [el('span', { class: 'en' }, b.foreign), el('span', { class: 'de' }, b.de)]),
+      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ besiegt'),
+    ]))),
+    total != null ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, '⭐ Insgesamt ' + total + ' Problemwörter besiegt') : null,
+    el('button', { class: 'primary', onclick: onNext }, 'Weiter'),
+  ]));
+  window.scrollTo(0, 0);
+}
+
+// ---------- PROBLEMWÖRTER ----------
+// Alle offenen Problemwörter einer Sprache (alle Bücher), wichtigste zuerst.
+async function loadProblemWords(langKey) {
+  const lang = LANGS[langKey];
+  const books = lang.books ? lang.books.map((b, i) => ({ b, i })) : [{ b: { chapters: lang.chapters, statsCollection: lang.statsCollection, label: null }, i: null }];
+  const data = await apiList(books.map(x => x.b.statsCollection));
+  const open = [], beaten = [];
+  books.forEach(({ b }) => {
+    const stats = data[b.statsCollection] || {};
+    b.chapters.forEach((ch, ci) => ch.words.forEach(w => {
+      const st = stats[w.wid];
+      if (st && st.beatenAt) beaten.push(w.wid);
+      const pr = problemState_(st);
+      if (!pr) return;
+      open.push({ foreign: w[lang.foreignField], de: w.de, wid: w.wid, chapterIdx: ci, statsCollection: b.statsCollection,
+        srcBook: b.completed ? b.label : null, srcTitle: (b.label ? b.label + ' · ' : '') + ch.title, problem: pr });
+    }));
+  });
+  return { open: sortProblems(open), beatenCount: beaten.length };
+}
+const PROBLEM_ROUND = 15;
+function problemCard(langKey) {
+  const box = el('div', { class: 'card', id: 'problemCard' }, [el('div', { class: 'section-title' }, '🎯 Meine Problemwörter'), el('div', { class: 'quiz-sub' }, 'Wird geladen …')]);
+  loadProblemWords(langKey).then(({ open, beatenCount }) => {
+    if (!SERVER_PROBLEMS) { box.remove(); return; }
+    box.innerHTML = '';
+    box.appendChild(el('div', { class: 'section-title' }, '🎯 Meine Problemwörter'));
+    box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;' }, open.length
+      ? open.length + (open.length === 1 ? ' Wort hattest' : ' Wörter hattest') + ' du zuletzt falsch. Schaffst du ein Wort an ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig, ist es besiegt ⭐.'
+      : 'Gerade keine Problemwörter – stark! 💪'));
+    box.appendChild(el('div', { class: 'toolbar' }, [
+      open.length ? el('button', { class: 'primary', onclick: () => startProblemQuiz(langKey) }, '🎯 Üben (' + Math.min(PROBLEM_ROUND, open.length) + ' Wörter)') : null,
+      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ ' + beatenCount + ' besiegt'),
+    ]));
+  }).catch(() => box.remove());
+  return box;
+}
+async function startProblemQuiz(langKey) {
+  app.innerHTML = '';
+  app.appendChild(el('div', { class: 'card center-col' }, [el('div', { class: 'big-check' }, 'Wird vorbereitet …')]));
+  const { open } = await loadProblemWords(langKey);
+  if (!open.length) return renderHome();
+  const words = shuffle(open.slice(0, PROBLEM_ROUND)).map(w => Object.assign({}, w, { isOld: true, isProblem: true, quizDir: randomDir() }));
+  const tally = {};
+  words.forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
+  runAttempt({
+    kind: 'problems', lang: langKey, bookIdx: currentBook, attemptScores: [], chapterIdx: null,
+    chapterTitle: '🎯 Problemwörter', attempt: 1, maxAttempts: 1,
+    chapterWords: [], extraWords: words, extraStillNeeded: new Set(), tally,
+  });
+}
+
 // Wie sicher sind die Wörter? Jedes Wort zählt gleich viel, nie geübte Wörter zählen als 0 %.
 // Pro Wort zählen die letzten 3 Antworten (ältere Daten ohne "recent": Gesamtbilanz).
 function wordSureness(s) {
@@ -1402,6 +1514,7 @@ async function renderHome() {
       el('button', { onclick: () => renderBookSelect() }, '📚 Anderes Buch (' + cfg.bookLabel + ')'),
     ]));
   }
+  app.appendChild(problemCard(cfg.key));
 
   app.appendChild(el('div', { class: 'card' }, [
     el('div', { class: 'section-title' }, cfg.chapterNoun + ' wählen'),
@@ -1444,7 +1557,8 @@ function renderChapter(idx) {
   app.innerHTML = '';
 
   const actions = el('div', { class: 'toolbar' }, [
-    el('button', { class: 'primary', onclick: () => startQuiz(idx) }, 'Abfrage starten'),
+    el('button', { class: 'primary', onclick: () => startLesson(idx) }, 'Abfrage starten'),
+    el('button', { onclick: () => startWarmup(idx, false) }, '🔥 Aufwärmen'),
     CAN_SPEAK ? el('button', { onclick: () => startDictation(idx) }, '🎧 Diktat') : null,
   ]);
   const prevDone = (LANGS[cfg.key].books && currentBook != null) ? LANGS[cfg.key].books.slice(0, currentBook).filter(b => b.completed).map(b => b.label) : [];
@@ -1463,6 +1577,121 @@ function renderChapter(idx) {
     el('h2', {}, chapter.title),
     actions,
     el('div', { style: 'overflow-x:auto;' }, table),
+  ]));
+}
+
+// ---------- AUFWÄRMEN (neue Lektion: Wörter ansehen, dann auswählen – zählt nicht) ----------
+async function startLesson(idx) {
+  const cfg = langCfg();
+  const chapter = cfg.chapters[idx];
+  let first = false;
+  if (!isCompletedBook(cfg)) {
+    try { await apiList(['learningDays']); } catch (e) { /* egal */ }
+    const done = practicedLessons();
+    first = !!done && !isPracticed(done, cfg.key, cfg.bookLabel, chapter.title);
+  }
+  if (!first) return startQuiz(idx);
+  homeBtn.hidden = false; langBtn.hidden = false;
+  crumb.textContent = chapter.title + ' · Neue Lektion';
+  app.innerHTML = '';
+  app.appendChild(el('div', { class: 'card center-col' }, [
+    el('div', { class: 'star-pop' }, '🔥'),
+    el('div', { class: 'big-check' }, 'Neue Lektion!'),
+    el('div', { class: 'quiz-sub' }, 'Wärm dich kurz auf: Erst schaust du dir die ' + chapter.words.length + ' neuen Wörter an, dann tippst du die richtige Übersetzung an. Das zählt noch nicht – danach startet die Abfrage.'),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+      el('button', { class: 'primary', onclick: () => startWarmup(idx, true) }, '🔥 Aufwärmen'),
+      el('button', { onclick: () => startQuiz(idx) }, 'Direkt zur Abfrage'),
+    ]),
+  ]));
+}
+function startWarmup(idx, thenQuiz) {
+  const cfg = langCfg();
+  const chapter = cfg.chapters[idx];
+  const words = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid }));
+  renderWarmCard({ cfg, idx, title: chapter.title, words, pos: 0, thenQuiz });
+}
+function warmSkipBtn(w) {
+  return el('button', { onclick: () => startQuiz(w.idx) }, w.thenQuiz ? 'Überspringen → Abfrage' : 'Zur Abfrage');
+}
+function renderWarmCard(w) {
+  crumb.textContent = w.title + ' · Aufwärmen';
+  app.innerHTML = '';
+  const word = w.words[w.pos];
+  const last = w.pos + 1 >= w.words.length;
+  app.appendChild(el('div', { class: 'card center-col' }, [
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🔥 Aufwärmen 1/2 · Wort ' + (w.pos + 1) + ' von ' + w.words.length)]),
+    el('div', { class: 'wcard' }, [el('div', { class: 'fw' }, word.foreign), el('div', { class: 'dw' }, word.de)]),
+    speakBtn(word.foreign, w.cfg.key, '🔊 Anhören'),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+      w.pos > 0 ? el('button', { onclick: () => { w.pos--; renderWarmCard(w); } }, '←') : null,
+      el('button', { class: 'primary', onclick: () => {
+        if (last) startWarmChoice(w); else { w.pos++; renderWarmCard(w); speak(w.words[w.pos].foreign, w.cfg.key); }
+      } }, last ? 'Weiter zum Antippen' : 'Weiter'),
+    ]),
+    warmSkipBtn(w),
+  ]));
+  if (w.pos === 0) speak(word.foreign, w.cfg.key);
+}
+function warmDistractors(w, word) {
+  const own = w.words.filter(x => x.foreign !== word.foreign).map(x => x.foreign);
+  const extra = [];
+  for (let d = 1; own.length + extra.length < 8 && d < w.cfg.chapters.length; d++) {
+    [w.idx - d, w.idx + d].forEach(ci => { const ch = w.cfg.chapters[ci]; if (ch) ch.words.forEach(x => extra.push(x[w.cfg.foreignField])); });
+  }
+  const pool = Array.from(new Set(shuffle(own).concat(shuffle(extra)))).filter(f => f !== word.foreign);
+  return pool.slice(0, 3);
+}
+function startWarmChoice(w) {
+  w.queue = shuffle(w.words); w.qpos = 0; w.requeued = new Set(); w.firstOk = 0; w.firstSeen = new Set();
+  renderWarmChoice(w);
+}
+function renderWarmChoice(w) {
+  crumb.textContent = w.title + ' · Aufwärmen';
+  app.innerHTML = '';
+  if (w.qpos >= w.queue.length) {
+    app.appendChild(el('div', { class: 'card center-col' }, [
+      el('div', { class: 'star-pop' }, '🔥'),
+      el('div', { class: 'big-check' }, 'Aufgewärmt!'),
+      el('div', { class: 'quiz-sub' }, w.firstOk + ' von ' + w.words.length + ' beim ersten Mal richtig. Jetzt bist du bereit für die Abfrage!'),
+      el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+        el('button', { class: 'primary', onclick: () => startQuiz(w.idx) }, 'Jetzt zur Abfrage'),
+        el('button', { onclick: () => renderChapter(w.idx) }, 'Zur Lektion'),
+      ]),
+    ]));
+    return;
+  }
+  const word = w.queue[w.qpos];
+  const opts = shuffle([word.foreign].concat(warmDistractors(w, word)));
+  const fb = el('div', { class: 'feedback' });
+  let done = false;
+  const nextBtn = el('button', { class: 'primary', hidden: true, onclick: () => { w.qpos++; renderWarmChoice(w); } }, 'Weiter');
+  const grid = el('div', { class: 'choice-grid' }, opts.map(o => {
+    const b = el('button', {}, o);
+    b.addEventListener('click', () => {
+      if (done) return; done = true;
+      const ok = o === word.foreign;
+      if (!w.firstSeen.has(word.wid)) { w.firstSeen.add(word.wid); if (ok) w.firstOk++; }
+      grid.querySelectorAll('button').forEach(x => { if (x.textContent === word.foreign) x.classList.add('right'); });
+      if (!ok) {
+        b.classList.add('wrong');
+        fb.textContent = 'Richtig ist: ' + word.foreign + ' – das Wort kommt gleich nochmal.';
+        fb.className = 'feedback bad';
+        if (!w.requeued.has(word.wid)) { w.requeued.add(word.wid); w.queue.push(word); }
+        nextBtn.hidden = false;
+      } else {
+        fb.textContent = '✓ Richtig!'; fb.className = 'feedback good';
+        setTimeout(() => { w.qpos++; renderWarmChoice(w); }, 650);
+      }
+      speak(word.foreign, w.cfg.key);
+    });
+    return b;
+  }));
+  app.appendChild(el('div', { class: 'card center-col' }, [
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🔥 Aufwärmen 2/2 · ' + (w.qpos + 1) + ' von ' + w.queue.length)]),
+    el('div', { class: 'quiz-sub' }, 'Tippe die richtige Übersetzung an:'),
+    el('div', { class: 'quiz-prompt' }, word.de),
+    grid, fb, nextBtn,
+    warmSkipBtn(w),
   ]));
 }
 
@@ -1545,7 +1774,7 @@ async function startQuiz(chapterIdx) {
   const chapterWordsArr = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, chapterIdx, isOld: false, quizDir: randomDir(),
     statsCollection: cfg.statsCollection, srcBook: null, srcTitle: chapter.title }));
   const extraWordsArr = extraWords.map(w => ({ foreign: w.foreign, de: w.de, wid: w.wid, chapterIdx: w.chapterIdx, isOld: true, quizDir: randomDir(),
-    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle }));
+    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle, isProblem: !!w.isProblem }));
 
   const tally = {};
   chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
@@ -1732,6 +1961,7 @@ function renderQuizQuestion(session, attemptState) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (!answered) submitAnswer(); } });
 
   const tagRow = el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
+    word.isProblem ? el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' }, '🎯 Problemwort') : null,
     word.isOld ? el('span', { class: 'pill ' + (word.srcBook ? 'book' : 'old') }, (word.srcBook ? '📗 ' : '🔁 Wiederholung · ') + word.srcTitle) : null,
     el('span', { class: 'pill' }, dirLabel(word.quizDir, cfg)),
   ]);
@@ -1785,7 +2015,7 @@ function renderAttemptResult(session, attemptState) {
   const dPct = counted.length ? Math.floor(100 * cCorrect / counted.length) : 0;
   const waitUntil = nextDolphinDate_(dolphinMap[dolKey(cfg, session.chapterIdx)]);
   const mustWait = SERVER_GOALS && waitUntil && gDay_(waitUntil) > gDay_(todayStr());
-  const dolphinHint = isCompletedBook(cfg) ? null : '🐬 Delfin-Quote: ' + dPct + ' % (Ziel in diesem Versuch: ' + dNeed + ' %)' +
+  const dolphinHint = (session.kind === 'problems' || isCompletedBook(cfg)) ? null : '🐬 Delfin-Quote: ' + dPct + ' % (Ziel in diesem Versuch: ' + dNeed + ' %)' +
     (cCorrect * 100 >= dNeed * counted.length ? (mustWait ? ' – stark! Der nächste Delfin für diese Unterlektion ist aber erst ab dem ' + gLong_(waitUntil) + ' möglich.' : ' – geschafft!') : '');
 
   const list = el('div', {}, attemptState.order.map(w => {
@@ -1960,6 +2190,7 @@ function renderSentences(session) {
 // Französisch: Satz-Training erst ab Lektion 4 (vorher reicht der Wortschatz noch nicht für eigene Sätze)
 const FR_SENTENCES_FROM_LESSON = 4;
 function sentencesEnabled(session) {
+  if (session.kind === 'problems') return false;
   if (session.lang !== 'fr') return true;
   const ch = (cfgFor(session.lang, session.bookIdx).chapters || [])[session.chapterIdx];
   const m = ch && /Lektion\s+(\d+)/.exec(ch.group || ch.title || '');
@@ -1981,18 +2212,20 @@ async function doSubmit(session) {
   const wordsWithResults = Object.values(session.tally).filter(w => w.results.length > 0);
   const classified = wordsWithResults.map(w => ({ ...w, ...classifyWord(w.results) }));
   const sc = dolphinScores(session);
+  const isProblems = session.kind === 'problems';
   const completed = isCompletedBook(cfg);
-  const key = completed ? null : dolKey(cfg, session.chapterIdx);
+  const key = (completed || isProblems) ? null : dolKey(cfg, session.chapterIdx);
 
   const submission = {
+    kind: session.kind || 'lesson',
     language: cfg.key,
     languageLabel: cfg.label,
-    bookLabel: cfg.bookLabel || null,
+    bookLabel: isProblems ? null : (cfg.bookLabel || null),
     chapterTitle: session.chapterTitle,
     dolphin: {
       earned: false, pct: sc.pct, attempt: sc.attempt, neededPct: sc.need, firstAttemptPct: sc.firstPct,
       chapterCount: key ? dolCount(cfg, session.chapterIdx) : 0, chapterMax: DOLPHIN_MAX, total: totalDolphins(),
-      reason: completed ? 'completed' : (sc.ok ? null : 'score'),
+      reason: isProblems ? 'none' : completed ? 'completed' : (sc.ok ? null : 'score'),
     },
     direction: 'mixed',
     attemptsUsed: session.attempt,
@@ -2043,8 +2276,11 @@ async function sendSubmission(cfg, session, classified, payload) {
   apiInvalidate();
   if (res.dolphinKey && res.dolphinDoc) dolphinMap[res.dolphinKey] = res.dolphinDoc;
   const d = Object.assign({}, payload.submission.dolphin, res.dolphin || {});
-  if (d.earned) renderDolphinCongrats(cfg, session, d, () => renderSubmitted(cfg, classified, null, d));
-  else { updateDolphinTotal(); renderSubmitted(cfg, classified, null, d); }
+  const showSubmitted = () => renderSubmitted(cfg, classified, null, d);
+  const beaten = Array.isArray(res.beaten) ? res.beaten : [];
+  const afterDolphin = beaten.length ? () => renderBeatenCongrats(session, beaten, res.beatenTotal, showSubmitted) : showSubmitted;
+  if (d.earned) renderDolphinCongrats(cfg, session, d, afterDolphin);
+  else { updateDolphinTotal(); afterDolphin(); }
 }
 
 function renderSubmitFailed(cfg, session, classified, payload, msg) {
