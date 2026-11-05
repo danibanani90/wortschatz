@@ -235,6 +235,12 @@ input[type=text] {
   border: 1.5px solid var(--line); background: var(--surface); color: var(--ink);
 }
 input[type=text]:focus { outline: none; border-color: var(--accent); }
+.vgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; width: 100%; text-align: left; }
+.vgrid .lab { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-soft); }
+.vgrid .val { font-size: 17px; font-weight: 700; color: var(--ink); }
+.vgrid .val.de { font-weight: 400; color: var(--ink-soft); font-size: 15px; }
+.verb-list { display: flex; flex-direction: column; gap: 10px; }
+.verb-item { border: 1.5px solid var(--line); border-radius: 14px; padding: 10px 14px; background: var(--surface); }
 .vfields { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 360px; }
 .vfield label { display: block; font-size: 13px; font-weight: 700; color: var(--ink-soft); margin: 0 0 3px 2px; }
 .vfield input[type=text] { width: 100%; }
@@ -634,6 +640,11 @@ function accentHintText(diffs, withPad) {
 }
 
 // ---------- UNREGELMÄSSIGE VERBEN ----------
+// Verb übersichtlich: Infinitive / Simple Past / Past Participle / Deutsch mit Beschriftung
+function verbGridEl(verb, de) {
+  const cell = (lab, val, cls) => el('div', {}, [el('div', { class: 'lab' }, lab), el('div', { class: 'val' + (cls ? ' ' + cls : '') }, val)]);
+  return el('div', { class: 'vgrid' }, [cell('Infinitive', verb.inf), cell('Simple Past', verb.past), cell('Past Participle', verb.pp), cell('Deutsch', de, 'de')]);
+}
 function isVerbChapter(ch) { return !!(ch && ch.words && ch.words.length && ch.words[0].verb); }
 const VERB_FIELDS = [
   { key: 'inf', label: 'Infinitive' }, { key: 'past', label: 'Simple Past' }, { key: 'pp', label: 'Past Participle' }, { key: 'de', label: 'Deutsch' },
@@ -1643,7 +1654,9 @@ function renderChapter(idx) {
     actions.appendChild(el('span', { class: 'pill old' }, '+ bis zu ' + EXTRA_WORD_COUNT + ' Wiederholungswörter aus deinen schon geübten Lektionen'));
   }
 
-  const table = el('table', { class: 'vocab-table' }, [
+  const table = isVerbChapter(chapter)
+    ? el('div', { class: 'verb-list' }, chapter.words.map(w => el('div', { class: 'verb-item' }, verbGridEl(w.verb, w.de))))
+    : el('table', { class: 'vocab-table' }, [
     el('thead', {}, el('tr', {}, [el('th', {}, cfg.label), el('th', {}, 'Deutsch')])),
     el('tbody', {}, chapter.words.map(w => el('tr', {}, [el('td', {}, w[cfg.foreignField]), el('td', {}, w.de)]))),
   ]);
@@ -1682,7 +1695,7 @@ async function startLesson(idx) {
 function startWarmup(idx, thenQuiz) {
   const cfg = langCfg();
   const chapter = cfg.chapters[idx];
-  const words = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid }));
+  const words = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, verb: w.verb || null }));
   renderWarmCard({ cfg, idx, title: chapter.title, words, pos: 0, thenQuiz });
 }
 function warmSkipBtn(w) {
@@ -1695,7 +1708,7 @@ function renderWarmCard(w) {
   const last = w.pos + 1 >= w.words.length;
   app.appendChild(el('div', { class: 'card center-col' }, [
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🔥 Aufwärmen 1/2 · Wort ' + (w.pos + 1) + ' von ' + w.words.length)]),
-    el('div', { class: 'wcard' }, [el('div', { class: 'fw' }, word.foreign), el('div', { class: 'dw' }, word.de)]),
+    el('div', { class: 'wcard' }, word.verb ? verbGridEl(word.verb, word.de) : [el('div', { class: 'fw' }, word.foreign), el('div', { class: 'dw' }, word.de)]),
     speakBtn(word.foreign, w.cfg.key, '🔊 Anhören'),
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
       w.pos > 0 ? el('button', { onclick: () => { w.pos--; renderWarmCard(w); } }, '←') : null,
@@ -2285,7 +2298,7 @@ function startRetry(session, attemptState) {
     app.appendChild(el('div', { class: 'card center-col' }, [
       el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '📚 Kurz anschauen · ' + (pos + 1) + ' von ' + wrong.length)]),
       el('div', { class: 'quiz-sub' }, pos === 0 ? 'Diese Wörter waren eben falsch. Lies sie dir in Ruhe durch – dann kommt Versuch ' + (session.attempt + 1) + '.' : ''),
-      el('div', { class: 'wcard' }, [el('div', { class: 'fw' }, w.foreign), el('div', { class: 'dw' }, w.de)]),
+      el('div', { class: 'wcard' }, w.verb ? verbGridEl(w.verb, w.de) : [el('div', { class: 'fw' }, w.foreign), el('div', { class: 'dw' }, w.de)]),
       speakBtn(w.verb ? [w.verb.inf, w.verb.past, w.verb.pp].join(', ') : w.foreign, session.lang, '🔊 Anhören'),
       el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
         pos > 0 ? el('button', { onclick: () => { pos--; show(); } }, '←') : null,
