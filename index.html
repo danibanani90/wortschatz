@@ -315,7 +315,8 @@ footer.crumbs { font-size: 12px; color: var(--ink-soft); text-align: center; pad
   </header>
 
   <div id="testBanner" class="dol-note" style="background:var(--warn-bg);border:2px solid var(--warn);font-weight:700;" hidden>🧪 TESTMODUS – zählt nicht für Christopher. Mails gehen nur an dich.
-    <div id="simBox">📆 Simuliertes Datum: <input type="date" id="simDateInput"> <button class="small" id="simDateReset">Echtes Datum</button></div></div>
+    <div id="simBox">📆 Simuliertes Datum: <input type="date" id="simDateInput"> <button class="small" id="simDateReset">Echtes Datum</button>
+    <button class="small" id="reminderTestBtn" hidden>🌊 Test-Erinnerung schicken</button> <span id="reminderTestMsg" style="font-weight:600;"></span></div></div>
   <div id="apiWarn" class="dol-note" style="background:var(--warn-bg);" hidden></div>
   <main id="app"></main>
 
@@ -3091,6 +3092,14 @@ if (TEST_MODE) {
   };
   si.addEventListener('change', () => applySim(si.value && si.value !== berlinDate() ? si.value : null));
   document.getElementById('simDateReset').addEventListener('click', () => applySim(null));
+  // Erinnerungs-Mail (18:30 Uhr) für das simulierte Datum ausprobieren – geht nur an die Test-Adresse
+  const rb = document.getElementById('reminderTestBtn'), rm = document.getElementById('reminderTestMsg');
+  apiList(['learningDays']).then(() => { if (SERVER_STREAK) rb.hidden = false; });
+  rb.addEventListener('click', async () => {
+    rm.textContent = '…';
+    try { const r = await apiGet({ action: 'reminderTest', simDate: todayStr() }); rm.textContent = r.wouldSend ? '✓ Mail geschickt' : '✓ Mail geschickt (im echten Betrieb käme heute keine)'; }
+    catch (e) { rm.textContent = 'Fehler: ' + (e && e.message || e); }
+  });
 } else {
   const sb = document.getElementById('simBox'); if (sb) sb.remove();
 }
