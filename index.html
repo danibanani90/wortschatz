@@ -375,7 +375,7 @@ function ensureTestReady() {
 }
 const apiCache = {};
 const apiPending = {};
-let SERVER_PROBLEMS = false;   // true, sobald das Google-Skript Problemwörter ("besiegt") kennt
+let SERVER_PROBLEMS = false;   // true, sobald das Google-Skript Knacknüsse ("geknackt") kennt
 let SERVER_GOALS = false;   // true, sobald das Google-Skript Lerntage/1-2-7 kennt
 function apiUrl() { return (TEST_MODE && TEST_API_URL) ? TEST_API_URL : API_URL; }
 function apiConfigured() { return /^https:\/\//.test(apiUrl()) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(apiUrl()); }
@@ -1313,33 +1313,33 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
 
 function problemPill(w) {
   return el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' },
-    '🎯 Problemwort' + (w.problemOk != null ? ' · ' + (w.problemOk > 0 ? '✔ ' : '') + w.problemOk + '/' + PROBLEM_DAYS + ' Tage richtig' : ''));
+    '🥜 Knacknuss' + (w.problemOk != null ? ' · ' + (w.problemOk > 0 ? '✔ ' : '') + w.problemOk + '/' + PROBLEM_DAYS + ' Tage richtig' : ''));
 }
 // Ergebnisseite: zeigt, was beim Einreichen mit dem Problemwort passiert (gezählt wird erst beim Einreichen)
 function problemResultPill(w, results) {
   if (!SERVER_PROBLEMS) return w.isProblem ? problemPill(w) : null;
   const anyWrong = results.some(r => !r);
   const style = 'background:var(--warn-bg);color:var(--warn);font-weight:700;';
-  if (!w.isProblem) return anyWrong ? el('span', { class: 'pill', style }, '🎯 wird zum Problemwort') : null;
+  if (!w.isProblem) return anyWrong ? el('span', { class: 'pill', style }, '🥜 wird zur Knacknuss') : null;
   const ok = w.problemOk || 0;
-  if (anyWrong) return el('span', { class: 'pill', style }, '🎯 Problemwort · zurück auf 0/' + PROBLEM_DAYS);
-  if (w.problemToday) return el('span', { class: 'pill', style }, '🎯 ' + (ok > 0 ? '✔ ' : '') + ok + '/' + PROBLEM_DAYS + ' (heute schon gezählt)');
-  if (ok + 1 >= PROBLEM_DAYS) return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + PROBLEM_DAYS + '/' + PROBLEM_DAYS + ' – beim Einreichen ⭐ besiegt!');
-  return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + (ok + 1) + '/' + PROBLEM_DAYS + ' (zählt beim Einreichen)');
+  if (anyWrong) return el('span', { class: 'pill', style }, '🥜 Knacknuss · zurück auf 0/' + PROBLEM_DAYS);
+  if (w.problemToday) return el('span', { class: 'pill', style }, '🥜 ' + (ok > 0 ? '✔ ' : '') + ok + '/' + PROBLEM_DAYS + ' (heute schon gezählt)');
+  if (ok + 1 >= PROBLEM_DAYS) return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🥜 ✔ ' + ok + ' → ' + PROBLEM_DAYS + '/' + PROBLEM_DAYS + ' – beim Einreichen 🥜 geknackt!');
+  return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🥜 ✔ ' + ok + ' → ' + (ok + 1) + '/' + PROBLEM_DAYS + ' (zählt beim Einreichen)');
 }
 function renderBeatenCongrats(session, beaten, total, onNext) {
   homeBtn.hidden = true; langBtn.hidden = true;
-  crumb.textContent = session.chapterTitle + ' · Problemwort besiegt!';
+  crumb.textContent = session.chapterTitle + ' · Knacknuss geknackt!';
   app.innerHTML = '';
   app.appendChild(el('div', { class: 'card center-col dol-card' }, [
-    el('div', { class: 'star-pop' }, '⭐'),
-    el('div', { class: 'big-check' }, beaten.length === 1 ? 'Problemwort besiegt!' : beaten.length + ' Problemwörter besiegt!'),
+    el('div', { class: 'star-pop' }, '🥜'),
+    el('div', { class: 'big-check' }, beaten.length === 1 ? 'Knacknuss geknackt!' : beaten.length + ' Knacknüsse geknackt!'),
     el('div', { class: 'quiz-sub' }, 'An ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig – das sitzt jetzt, ' + NEPHEW_NICK + '! 💪'),
     el('div', { style: 'width:100%;' }, beaten.map(b => el('div', { class: 'wordline' }, [
       el('div', { class: 'words' }, [el('span', { class: 'en' }, b.foreign), el('span', { class: 'de' }, b.de)]),
-      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ besiegt'),
+      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🥜 geknackt'),
     ]))),
-    total != null ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, '⭐ Insgesamt ' + total + ' Problemwörter besiegt') : null,
+    total != null ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, '🥜 Insgesamt ' + total + ' Knacknüsse geknackt') : null,
     el('button', { class: 'primary', onclick: onNext }, 'Weiter'),
   ]));
   window.scrollTo(0, 0);
@@ -1367,17 +1367,17 @@ async function loadProblemWords(langKey) {
 }
 const PROBLEM_ROUND = 15;
 function problemCard(langKey) {
-  const box = el('div', { class: 'card', id: 'problemCard' }, [el('div', { class: 'section-title' }, '🎯 Meine Problemwörter'), el('div', { class: 'quiz-sub' }, 'Wird geladen …')]);
+  const box = el('div', { class: 'card', id: 'problemCard' }, [el('div', { class: 'section-title' }, '🥜 Meine Knacknüsse'), el('div', { class: 'quiz-sub' }, 'Wird geladen …')]);
   loadProblemWords(langKey).then(({ open, beatenCount }) => {
     if (!SERVER_PROBLEMS) { box.remove(); return; }
     box.innerHTML = '';
-    box.appendChild(el('div', { class: 'section-title' }, '🎯 Meine Problemwörter'));
+    box.appendChild(el('div', { class: 'section-title' }, '🥜 Meine Knacknüsse'));
     box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;' }, open.length
-      ? open.length + (open.length === 1 ? ' Wort hattest' : ' Wörter hattest') + ' du zuletzt falsch. Schaffst du ein Wort an ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig, ist es besiegt ⭐.'
-      : 'Gerade keine Problemwörter – stark! 💪'));
+      ? (open.length === 1 ? '1 Wort sitzt' : open.length + ' Wörter sitzen') + ' noch nicht ganz – das sind deine Knacknüsse. Hast du eine an ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig, ist sie geknackt! 🥜'
+      : 'Gerade keine Knacknüsse – stark! 💪'));
     box.appendChild(el('div', { class: 'toolbar' }, [
-      open.length ? el('button', { class: 'primary', onclick: () => startProblemQuiz(langKey) }, '🎯 Üben (' + Math.min(PROBLEM_ROUND, open.length) + ' Wörter)') : null,
-      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ ' + beatenCount + ' besiegt'),
+      open.length ? el('button', { class: 'primary', onclick: () => startProblemQuiz(langKey) }, '🥜 Knacknüsse üben (' + Math.min(PROBLEM_ROUND, open.length) + ')') : null,
+      el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🥜 ' + beatenCount + ' geknackt'),
     ]));
     if (open.length) {
       box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-weight:600;' }, '📅 Zählt als Lerntag · keine Delfine'));
@@ -1386,7 +1386,7 @@ function problemCard(langKey) {
       const toggle = el('button', { class: 'small ghost', type: 'button' }, 'Liste ansehen ▾');
       toggle.addEventListener('click', () => { list.hidden = !list.hidden; toggle.textContent = list.hidden ? 'Liste ansehen ▾' : 'Liste zuklappen ▴'; });
       box.appendChild(toggle);
-      list.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-size:12px;width:100%;' }, 'Die Zahl zeigt, an wie vielen Tagen du das Wort schon richtig hattest (3 Tage = ⭐ besiegt)'));
+      list.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-size:12px;width:100%;' }, 'Die Zahl zeigt, an wie vielen Tagen du das Wort schon richtig hattest (3 Tage = geknackt 🥜)'));
       box.appendChild(list);
     }
   }).catch(() => box.remove());
@@ -1403,7 +1403,7 @@ async function startProblemQuiz(langKey) {
   words.forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
   runAttempt({
     kind: 'problems', lang: langKey, bookIdx: currentBook, attemptScores: [], chapterIdx: null,
-    chapterTitle: '🎯 Problemwörter', attempt: 1, maxAttempts: 1,
+    chapterTitle: '🥜 Knacknüsse', attempt: 1, maxAttempts: 1,
     chapterWords: [], extraWords: words, extraStillNeeded: new Set(), tally,
   });
 }
@@ -2194,7 +2194,7 @@ function renderAttemptResult(session, attemptState) {
     el('div', { class: 'big-check' }, numCorrect + ' von ' + numTotal + ' richtig'),
     dolphinHint ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, dolphinHint) : null,
     session.kind === 'problems'
-      ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, 'Jetzt einreichen – 📅 das zählt als Lerntag (keine Delfine). Richtige Wörter rücken einen Tag näher an ⭐ besiegt.')
+      ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, 'Jetzt einreichen – 📅 das zählt als Lerntag (keine Delfine). Jedes richtige Wort ist einen Tag näher dran, geknackt zu werden 🥜')
     : !canRetry
       ? el('div', { class: 'quiz-sub' }, 'Das war der letzte Versuch – bitte einreichen.')
       : el('div', { class: 'quiz-sub' }, 'Versuch ' + session.attempt + ' von ' + session.maxAttempts + ' · Beim nächsten Versuch kommen wieder alle Wörter dran'),
