@@ -1268,7 +1268,7 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
 
 function problemPill(w) {
   return el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' },
-    '🎯 Problemwort' + (w.problemOk != null ? ' · ✔ ' + w.problemOk + '/' + PROBLEM_DAYS + ' Tage' : ''));
+    '🎯 Problemwort' + (w.problemOk != null ? ' · ' + (w.problemOk > 0 ? '✔ ' : '') + w.problemOk + '/' + PROBLEM_DAYS + ' Tage richtig' : ''));
 }
 // Ergebnisseite: zeigt, was beim Einreichen mit dem Problemwort passiert (gezählt wird erst beim Einreichen)
 function problemResultPill(w, results) {
@@ -1278,7 +1278,7 @@ function problemResultPill(w, results) {
   if (!w.isProblem) return anyWrong ? el('span', { class: 'pill', style }, '🎯 wird zum Problemwort') : null;
   const ok = w.problemOk || 0;
   if (anyWrong) return el('span', { class: 'pill', style }, '🎯 Problemwort · zurück auf 0/' + PROBLEM_DAYS);
-  if (w.problemToday) return el('span', { class: 'pill', style }, '🎯 ✔ ' + ok + '/' + PROBLEM_DAYS + ' (heute schon gezählt)');
+  if (w.problemToday) return el('span', { class: 'pill', style }, '🎯 ' + (ok > 0 ? '✔ ' : '') + ok + '/' + PROBLEM_DAYS + ' (heute schon gezählt)');
   if (ok + 1 >= PROBLEM_DAYS) return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + PROBLEM_DAYS + '/' + PROBLEM_DAYS + ' – beim Einreichen ⭐ besiegt!');
   return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + (ok + 1) + '/' + PROBLEM_DAYS + ' (zählt beim Einreichen)');
 }
@@ -1337,11 +1337,11 @@ function problemCard(langKey) {
     if (open.length) {
       box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-weight:600;' }, '📅 Zählt als Lerntag · keine Delfine'));
       const list = el('div', { hidden: true, style: 'display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;' }, open.map(w =>
-        el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--ink);' }, w.foreign + ' · ✔ ' + w.problem.okDays + '/' + PROBLEM_DAYS)));
+        el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--ink);' }, w.foreign + ' · ' + (w.problem.okDays > 0 ? '✔ ' : '') + w.problem.okDays + '/' + PROBLEM_DAYS)));
       const toggle = el('button', { class: 'small ghost', type: 'button' }, 'Liste ansehen ▾');
       toggle.addEventListener('click', () => { list.hidden = !list.hidden; toggle.textContent = list.hidden ? 'Liste ansehen ▾' : 'Liste zuklappen ▴'; });
       box.appendChild(toggle);
-      list.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-size:12px;width:100%;' }, '✔ = an so vielen Tagen schon richtig (3 Tage = ⭐ besiegt)'));
+      list.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-size:12px;width:100%;' }, 'Die Zahl zeigt, an wie vielen Tagen du das Wort schon richtig hattest (3 Tage = ⭐ besiegt)'));
       box.appendChild(list);
     }
   }).catch(() => box.remove());
