@@ -824,7 +824,7 @@ function buildPool(src, include, foreignField) {
       const correct = s ? (s.correct || 0) : 0;
       const weight = Math.max(0.4, 1 + 3 * wrong - 0.5 * correct);
       pool.push({
-        foreign: w[foreignField], de: w.de, wid: w.wid, chapterIdx: ci, weight, problem: problemState_(s),
+        foreign: w[foreignField], de: w.de, wid: w.wid, chapterIdx: ci, weight, problem: problemState_(s), problemToday: okToday(s),
         statsCollection: src.statsCollection,
         srcBook: src.bookLabel || null,
         srcTitle: src.bookLabel ? (src.bookLabel + ' · ' + ch.title) : ch.title,
@@ -861,6 +861,7 @@ function pickExtraWords(cfg, chapterIdx, statsMap, prevBooks) {
   return reserved.concat(mixExtra(samePool, prevPool, n - reserved.length));
 }
 const PROBLEM_SLOTS = 5;
+function okToday(doc) { return !!(doc && Array.isArray(doc.okDays) && doc.okDays.indexOf(todayStr()) >= 0); }
 function sortProblems(list) {   // wenigste richtige Tage zuerst, dann der jüngste Fehler zuerst
   return list.slice().sort((a, b) => (a.problem.okDays - b.problem.okDays) || String(b.problem.lastWrongAt).localeCompare(String(a.problem.lastWrongAt)));
 }
@@ -1269,6 +1270,18 @@ function problemPill(w) {
   return el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' },
     '🎯 Problemwort' + (w.problemOk != null ? ' · ✔ ' + w.problemOk + '/' + PROBLEM_DAYS + ' Tage' : ''));
 }
+// Ergebnisseite: zeigt, was beim Einreichen mit dem Problemwort passiert (gezählt wird erst beim Einreichen)
+function problemResultPill(w, results) {
+  if (!SERVER_PROBLEMS) return w.isProblem ? problemPill(w) : null;
+  const anyWrong = results.some(r => !r);
+  const style = 'background:var(--warn-bg);color:var(--warn);font-weight:700;';
+  if (!w.isProblem) return anyWrong ? el('span', { class: 'pill', style }, '🎯 wird zum Problemwort') : null;
+  const ok = w.problemOk || 0;
+  if (anyWrong) return el('span', { class: 'pill', style }, '🎯 Problemwort · zurück auf 0/' + PROBLEM_DAYS);
+  if (w.problemToday) return el('span', { class: 'pill', style }, '🎯 ✔ ' + ok + '/' + PROBLEM_DAYS + ' (heute schon gezählt)');
+  if (ok + 1 >= PROBLEM_DAYS) return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + PROBLEM_DAYS + '/' + PROBLEM_DAYS + ' – beim Einreichen ⭐ besiegt!');
+  return el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '🎯 ✔ ' + ok + ' → ' + (ok + 1) + '/' + PROBLEM_DAYS + ' (zählt beim Einreichen)');
+}
 function renderBeatenCongrats(session, beaten, total, onNext) {
   homeBtn.hidden = true; langBtn.hidden = true;
   crumb.textContent = session.chapterTitle + ' · Problemwort besiegt!';
@@ -1302,7 +1315,7 @@ async function loadProblemWords(langKey) {
       const pr = problemState_(st);
       if (!pr) return;
       open.push({ foreign: w[lang.foreignField], de: w.de, wid: w.wid, chapterIdx: ci, statsCollection: b.statsCollection,
-        srcBook: b.completed ? b.label : null, srcTitle: (b.label ? b.label + ' · ' : '') + ch.title, problem: pr });
+        srcBook: b.completed ? b.label : null, srcTitle: (b.label ? b.label + ' · ' : '') + ch.title, problem: pr, problemToday: okToday(st) });
     }));
   });
   return { open: sortProblems(open), beatenCount: beaten.length };
@@ -1317,14 +1330,20 @@ function problemCard(langKey) {
     box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;' }, open.length
       ? open.length + (open.length === 1 ? ' Wort hattest' : ' Wörter hattest') + ' du zuletzt falsch. Schaffst du ein Wort an ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig, ist es besiegt ⭐.'
       : 'Gerade keine Problemwörter – stark! 💪'));
-    if (open.length) box.appendChild(el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;' }, open.slice(0, 10).map(w =>
-      el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--ink);' }, w.foreign + ' · ✔ ' + w.problem.okDays + '/' + PROBLEM_DAYS))
-      .concat(open.length > 10 ? [el('span', { class: 'pill' }, '+ ' + (open.length - 10) + ' weitere')] : [])));
     box.appendChild(el('div', { class: 'toolbar' }, [
       open.length ? el('button', { class: 'primary', onclick: () => startProblemQuiz(langKey) }, '🎯 Üben (' + Math.min(PROBLEM_ROUND, open.length) + ' Wörter)') : null,
       el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ ' + beatenCount + ' besiegt'),
     ]));
-    if (open.length) box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-weight:600;' }, '📅 Zählt als Lerntag · keine Delfine. ✔ = an so vielen Tagen schon richtig.'));
+    if (open.length) {
+      box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-weight:600;' }, '📅 Zählt als Lerntag · keine Delfine'));
+      const list = el('div', { hidden: true, style: 'display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;' }, open.map(w =>
+        el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--ink);' }, w.foreign + ' · ✔ ' + w.problem.okDays + '/' + PROBLEM_DAYS)));
+      const toggle = el('button', { class: 'small ghost', type: 'button' }, 'Liste ansehen ▾');
+      toggle.addEventListener('click', () => { list.hidden = !list.hidden; toggle.textContent = list.hidden ? 'Liste ansehen ▾' : 'Liste zuklappen ▴'; });
+      box.appendChild(toggle);
+      list.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-size:12px;width:100%;' }, '✔ = an so vielen Tagen schon richtig (3 Tage = ⭐ besiegt)'));
+      box.appendChild(list);
+    }
   }).catch(() => box.remove());
   return box;
 }
@@ -1780,7 +1799,7 @@ async function startQuiz(chapterIdx) {
   const chapterWordsArr = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, chapterIdx, isOld: false, quizDir: randomDir(),
     statsCollection: cfg.statsCollection, srcBook: null, srcTitle: chapter.title }));
   const extraWordsArr = extraWords.map(w => ({ foreign: w.foreign, de: w.de, wid: w.wid, chapterIdx: w.chapterIdx, isOld: true, quizDir: randomDir(),
-    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle, isProblem: !!w.isProblem, problemOk: w.problem ? w.problem.okDays : null }));
+    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle, isProblem: !!w.isProblem, problemOk: w.problem ? w.problem.okDays : null, problemToday: !!w.problemToday }));
 
   const tally = {};
   chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
@@ -2027,11 +2046,12 @@ function renderAttemptResult(session, attemptState) {
 
   const list = el('div', {}, attemptState.order.map(w => {
     const c = attemptState.correctThisAttempt[w.wid];
+    const allRes = ((session.tally || {})[w.wid] || {}).results || [];
     return el('div', { class: 'wordline' }, [
       el('div', { class: 'words' }, [
         el('span', { class: 'en' }, w.foreign),
         el('span', { class: 'de' }, w.de),
-        w.isProblem ? problemPill(w) : null,
+        problemResultPill(w, allRes),
         w.isOld ? el('span', { class: 'pill ' + (w.srcBook ? 'book' : 'old') }, (w.srcBook ? '📗 ' : '') + w.srcTitle) : null,
         (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“' +
           ((attemptState.notes || {})[w.wid] ? ' – ' + noteLabel((attemptState.notes || {})[w.wid]) : '')) : null,
