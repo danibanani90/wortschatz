@@ -1265,6 +1265,10 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
   window.scrollTo(0, 0);
 }
 
+function problemPill(w) {
+  return el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' },
+    '🎯 Problemwort' + (w.problemOk != null ? ' · ✔ ' + w.problemOk + '/' + PROBLEM_DAYS + ' Tage' : ''));
+}
 function renderBeatenCongrats(session, beaten, total, onNext) {
   homeBtn.hidden = true; langBtn.hidden = true;
   crumb.textContent = session.chapterTitle + ' · Problemwort besiegt!';
@@ -1313,10 +1317,14 @@ function problemCard(langKey) {
     box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;' }, open.length
       ? open.length + (open.length === 1 ? ' Wort hattest' : ' Wörter hattest') + ' du zuletzt falsch. Schaffst du ein Wort an ' + PROBLEM_DAYS + ' verschiedenen Tagen richtig, ist es besiegt ⭐.'
       : 'Gerade keine Problemwörter – stark! 💪'));
+    if (open.length) box.appendChild(el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;' }, open.slice(0, 10).map(w =>
+      el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--ink);' }, w.foreign + ' · ✔ ' + w.problem.okDays + '/' + PROBLEM_DAYS))
+      .concat(open.length > 10 ? [el('span', { class: 'pill' }, '+ ' + (open.length - 10) + ' weitere')] : [])));
     box.appendChild(el('div', { class: 'toolbar' }, [
       open.length ? el('button', { class: 'primary', onclick: () => startProblemQuiz(langKey) }, '🎯 Üben (' + Math.min(PROBLEM_ROUND, open.length) + ' Wörter)') : null,
       el('span', { class: 'pill', style: 'background:var(--good-bg);color:var(--good);font-weight:700;' }, '⭐ ' + beatenCount + ' besiegt'),
     ]));
+    if (open.length) box.appendChild(el('div', { class: 'quiz-sub', style: 'text-align:left;font-weight:600;' }, '📅 Zählt als Lerntag · keine Delfine. ✔ = an so vielen Tagen schon richtig.'));
   }).catch(() => box.remove());
   return box;
 }
@@ -1325,7 +1333,7 @@ async function startProblemQuiz(langKey) {
   app.appendChild(el('div', { class: 'card center-col' }, [el('div', { class: 'big-check' }, 'Wird vorbereitet …')]));
   const { open } = await loadProblemWords(langKey);
   if (!open.length) return renderHome();
-  const words = shuffle(open.slice(0, PROBLEM_ROUND)).map(w => Object.assign({}, w, { isOld: true, isProblem: true, quizDir: randomDir() }));
+  const words = shuffle(open.slice(0, PROBLEM_ROUND)).map(w => Object.assign({}, w, { isOld: true, isProblem: true, problemOk: w.problem.okDays, quizDir: randomDir() }));
   const tally = {};
   words.forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
   runAttempt({
@@ -1625,12 +1633,11 @@ function renderWarmCard(w) {
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
       w.pos > 0 ? el('button', { onclick: () => { w.pos--; renderWarmCard(w); } }, '←') : null,
       el('button', { class: 'primary', onclick: () => {
-        if (last) startWarmChoice(w); else { w.pos++; renderWarmCard(w); speak(w.words[w.pos].foreign, w.cfg.key); }
+        if (last) startWarmChoice(w); else { w.pos++; renderWarmCard(w); }
       } }, last ? 'Weiter zum Antippen' : 'Weiter'),
     ]),
     warmSkipBtn(w),
   ]));
-  if (w.pos === 0) speak(word.foreign, w.cfg.key);
 }
 function warmDistractors(w, word) {
   const own = w.words.filter(x => x.foreign !== word.foreign).map(x => x.foreign);
@@ -1682,7 +1689,6 @@ function renderWarmChoice(w) {
         fb.textContent = '✓ Richtig!'; fb.className = 'feedback good';
         setTimeout(() => { w.qpos++; renderWarmChoice(w); }, 650);
       }
-      speak(word.foreign, w.cfg.key);
     });
     return b;
   }));
@@ -1690,7 +1696,7 @@ function renderWarmChoice(w) {
     el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🔥 Aufwärmen 2/2 · ' + (w.qpos + 1) + ' von ' + w.queue.length)]),
     el('div', { class: 'quiz-sub' }, 'Tippe die richtige Übersetzung an:'),
     el('div', { class: 'quiz-prompt' }, word.de),
-    grid, fb, nextBtn,
+    grid, fb, nextBtn, speakBtn(word.foreign, w.cfg.key, '🔊 Lösung anhören'),
     warmSkipBtn(w),
   ]));
 }
@@ -1774,7 +1780,7 @@ async function startQuiz(chapterIdx) {
   const chapterWordsArr = chapter.words.map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, chapterIdx, isOld: false, quizDir: randomDir(),
     statsCollection: cfg.statsCollection, srcBook: null, srcTitle: chapter.title }));
   const extraWordsArr = extraWords.map(w => ({ foreign: w.foreign, de: w.de, wid: w.wid, chapterIdx: w.chapterIdx, isOld: true, quizDir: randomDir(),
-    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle, isProblem: !!w.isProblem }));
+    statsCollection: w.statsCollection, srcBook: w.srcBook, srcTitle: w.srcTitle, isProblem: !!w.isProblem, problemOk: w.problem ? w.problem.okDays : null }));
 
   const tally = {};
   chapterWordsArr.concat(extraWordsArr).forEach(w => { tally[w.wid] = Object.assign({}, w, { results: [], inputs: [], notes: [] }); });
@@ -1961,7 +1967,8 @@ function renderQuizQuestion(session, attemptState) {
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (!answered) submitAnswer(); } });
 
   const tagRow = el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
-    word.isProblem ? el('span', { class: 'pill', style: 'background:var(--warn-bg);color:var(--warn);font-weight:700;' }, '🎯 Problemwort') : null,
+    word.isProblem ? problemPill(word) : null,
+    session.kind === 'problems' ? el('span', { class: 'pill' }, '📅 zählt als Lerntag · keine Delfine') : null,
     word.isOld ? el('span', { class: 'pill ' + (word.srcBook ? 'book' : 'old') }, (word.srcBook ? '📗 ' : '🔁 Wiederholung · ') + word.srcTitle) : null,
     el('span', { class: 'pill' }, dirLabel(word.quizDir, cfg)),
   ]);
@@ -2024,6 +2031,7 @@ function renderAttemptResult(session, attemptState) {
       el('div', { class: 'words' }, [
         el('span', { class: 'en' }, w.foreign),
         el('span', { class: 'de' }, w.de),
+        w.isProblem ? problemPill(w) : null,
         w.isOld ? el('span', { class: 'pill ' + (w.srcBook ? 'book' : 'old') }, (w.srcBook ? '📗 ' : '') + w.srcTitle) : null,
         (!c && attemptState.answers && attemptState.answers[w.wid]) ? el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Deine Antwort: „' + attemptState.answers[w.wid] + '“' +
           ((attemptState.notes || {})[w.wid] ? ' – ' + noteLabel((attemptState.notes || {})[w.wid]) : '')) : null,
@@ -2043,7 +2051,9 @@ function renderAttemptResult(session, attemptState) {
   app.appendChild(el('div', { class: 'card center-col' }, [
     el('div', { class: 'big-check' }, numCorrect + ' von ' + numTotal + ' richtig'),
     dolphinHint ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, dolphinHint) : null,
-    !canRetry
+    session.kind === 'problems'
+      ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, 'Jetzt einreichen – 📅 das zählt als Lerntag (keine Delfine). Richtige Wörter rücken einen Tag näher an ⭐ besiegt.')
+    : !canRetry
       ? el('div', { class: 'quiz-sub' }, 'Das war der letzte Versuch – bitte einreichen.')
       : el('div', { class: 'quiz-sub' }, 'Versuch ' + session.attempt + ' von ' + session.maxAttempts + ' · Beim nächsten Versuch kommen wieder alle Wörter dran'),
   ]));
@@ -2231,7 +2241,7 @@ async function doSubmit(session) {
     attemptsUsed: session.attempt,
     submittedAt: new Date().toISOString(),
     nephewName: NEPHEW_NAME,
-    words: classified.map(w => ({ foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], notes: w.notes || [], level: w.level, label: w.label })),
+    words: classified.map(w => ({ wid: w.wid, collection: w.statsCollection || cfg.statsCollection, isProblem: !!w.isProblem, foreign: w.foreign, de: w.de, chapterIdx: w.chapterIdx, chapterLabel: w.srcTitle, sourceBook: w.srcBook || null, isOld: w.isOld, quizDir: w.quizDir, results: w.results, answers: w.inputs || [], notes: w.notes || [], level: w.level, label: w.label })),
     sentences: (session.sentences || []).map(x => ({ word: x.word, de: x.de, wasWrong: x.wasWrong, first: x.first, final: x.final, wordUsed: x.wordUsed !== false,
       firstIssues: x.firstIssues, finalIssues: x.finalIssues, checked: x.checked })),
   };
