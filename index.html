@@ -176,12 +176,22 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .goal-msg.green, .goal-msg.reached { background: var(--good-bg); color: var(--good); }
 .goal-msg.yellow, .goal-msg.missed { background: var(--warn-bg); color: var(--warn); }
 .goal-msg.red { background: var(--bad-bg); color: var(--bad); }
+.goal-msg.info { background: var(--accent-soft); color: var(--ink); }
 .goal-head { font-family:"Fredoka",sans-serif; font-size:17px; font-weight:600; }
 .goal-sub { font-size:13px; color: var(--ink-soft); }
 .goal-steps { display:flex; flex-direction:column; gap:8px; }
 .goal-step { display:flex; gap:10px; align-items:flex-start; font-size:14px; }
 .goal-step .ico { width:24px; text-align:center; flex:none; }
 .dol-next { display:block; font-size:11px; color: var(--ink-soft); margin-top:2px; }
+.dol-gap { display:inline-block; font-size:13px; margin-left:4px; }
+.gap-prog { font-size:14px; font-weight:600; color: var(--accent); background: var(--accent-soft); border-radius:10px; padding:6px 10px; }
+.wave-card { display:flex; flex-direction:column; gap:6px; }
+.wave-row { display:flex; align-items:baseline; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.wave-num { font-size:26px; font-weight:800; color: var(--ink); }
+.wave-rec { font-size:13px; color: var(--ink-soft); font-weight:600; }
+.wave-sub { font-size:13px; color: var(--ink-soft); }
+.task-row { display:flex; align-items:center; gap:12px; }
+.task-ico { font-size:32px; line-height:1; }
 #simBox { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; font-weight:600; }
 #simBox input { font: inherit; padding:4px 8px; border-radius:8px; border:1px solid var(--warn); background: var(--surface); color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
@@ -389,6 +399,8 @@ const apiCache = {};
 const apiPending = {};
 let SERVER_PROBLEMS = false;   // true, sobald das Google-Skript Knacknüsse ("geknackt") kennt
 let SERVER_GOALS = false;   // true, sobald das Google-Skript Lerntage/1-2-7 kennt
+let SERVER_STREAK = false;   // true, sobald das Google-Skript die Lern-Welle kennt (Paket 4)
+let SERVER_GAPDOL = false;   // true, sobald das Google-Skript den Lückensatz-Delfin kennt
 function apiUrl() { return (TEST_MODE && TEST_API_URL) ? TEST_API_URL : API_URL; }
 function apiConfigured() { return /^https:\/\//.test(apiUrl()) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(apiUrl()); }
 function setApiWarning(msg) {
@@ -433,6 +445,8 @@ async function apiList(cols) {
       .then(data => {
         if (data.docs && data.docs.learningDays && Array.isArray(data.docs.learningDays.list)) SERVER_GOALS = true;
         if (Array.isArray(data.features) && data.features.indexOf('problems') >= 0) SERVER_PROBLEMS = true;
+        if (Array.isArray(data.features) && data.features.indexOf('streak') >= 0) SERVER_STREAK = true;
+        if (Array.isArray(data.features) && data.features.indexOf('gapdolphin') >= 0) SERVER_GAPDOL = true;
         missing.forEach(c => { apiCache[c] = { at: Date.now(), docs: (data.docs && data.docs[c]) || {} }; });
         setApiWarning('');
       })
@@ -1136,6 +1150,33 @@ function problemState_(doc) {
   if (ok >= PROBLEM_DAYS) return null;
   return { okDays: ok, lastWrongAt: lw };
 }
+// Lern-Welle (Streak): Lerntage am Stück. 1 Joker pro Woche (Mo–So) überbrückt automatisch einen verpassten Tag,
+// dazu Extra-Joker: je 5 geknackte Knacknüsse 1 Joker (höchstens 1 pro Woche verdient, höchstens 2 auf Vorrat).
+// Ein Joker-Tag hält die Welle am Leben, zählt aber nicht als Tag dazu.
+const STREAK_MILESTONES = [3, 7, 14, 30, 50, 100];
+const JOKER_PER_KNACK = 5, JOKER_STOCK_MAX = 2;
+function gWeek_(n) { return Math.floor((n + 3) / 7); }   // Wochen ab Montag (Tag 0 = Do, 1.1.1970)
+function streakStatus_(dayDates, beatenDates, today) {
+  const days = new Set((dayDates || []).filter(Boolean));
+  const t = gDay_(today);
+  const sorted = Array.from(days).filter(d => gDay_(d) <= t).sort();
+  const beaten = (beatenDates || []).filter(Boolean).map(gDay_).filter(n => n <= t).sort((a, b) => a - b);
+  let cur = 0, rec = 0, extra = 0, pending = 0, bi = 0, weekUsed = null, earnedWeek = null, lastJoker = null;
+  if (sorted.length) {
+    for (let d = gDay_(sorted[0]); d <= t; d++) {
+      while (bi < beaten.length && beaten[bi] <= d) { bi++; if (bi % JOKER_PER_KNACK === 0) pending++; }
+      const wk = gWeek_(d);
+      if (pending > 0 && earnedWeek !== wk && extra < JOKER_STOCK_MAX) { extra++; pending--; earnedWeek = wk; }
+      if (days.has(gStr_(d))) { cur++; if (cur > rec) rec = cur; continue; }
+      if (d === t || cur === 0) continue;                     // heute ist noch offen / keine Welle zu retten
+      if (weekUsed !== wk) { weekUsed = wk; lastJoker = gStr_(d); continue; }
+      if (extra > 0) { extra--; lastJoker = gStr_(d); continue; }
+      cur = 0;
+    }
+  }
+  return { current: cur, record: rec, todayDone: days.has(today), weeklyLeft: weekUsed === gWeek_(t) ? 0 : 1, extra,
+           nextExtraIn: JOKER_PER_KNACK - (beaten.length % JOKER_PER_KNACK), lastJoker };
+}
 // ===================== /ZIELE =====================
 
 // Heute (im Testmodus ggf. simuliert)
@@ -1317,11 +1358,15 @@ function renderDolphinCongrats(cfg, session, d, onNext) {
       el('div', { class: 'dol-jump' }, el('span', {}, '🐬')),
       el('div', { class: 'dol-waves' }, '🌊🌊🌊🌊🌊🌊🌊🌊'),
     ]),
-    el('div', { class: 'big-check' }, 'Super gelernt, ' + NEPHEW_NICK + '!'),
-    el('div', { class: 'quiz-sub' }, 'Du hast ' + d.pct + ' % richtig und dir einen neuen Delfin verdient!'),
-    dolSlotsEl(d.chapterCount, true),
-    el('div', { class: 'quiz-sub' }, d.chapterCount + ' von ' + DOLPHIN_MAX + ' Delfinen für „' + session.chapterTitle + '“ · insgesamt 🐬 ' + d.total),
-    d.nextDate ? el('div', { class: 'quiz-sub' }, 'Den nächsten Delfin hier kannst du ab dem ' + gLong_(d.nextDate) + ' holen.') : null,
+    el('div', { class: 'big-check' }, d.gap ? 'Lückensatz-Profi, ' + NEPHEW_NICK + '!' : 'Super gelernt, ' + NEPHEW_NICK + '!'),
+    d.gap
+      ? el('div', { class: 'quiz-sub' }, d.gapSure + ' von ' + d.gapTotal + ' Lückensätzen sitzen sicher – dafür bekommst du den ✏️🐬 Lückensatz-Delfin dieser Lektion!')
+      : el('div', { class: 'quiz-sub' }, 'Du hast ' + d.pct + ' % richtig und dir einen neuen Delfin verdient!'),
+    d.gap ? el('div', { class: 'star-pop', style: 'font-size:44px;' }, '✏️🐬') : dolSlotsEl(d.chapterCount, true),
+    d.gap
+      ? el('div', { class: 'quiz-sub' }, 'Pro Lektion gibt es einen Lückensatz-Delfin · insgesamt 🐬 ' + d.total)
+      : el('div', { class: 'quiz-sub' }, d.chapterCount + ' von ' + DOLPHIN_MAX + ' Delfinen für „' + session.chapterTitle + '“ · insgesamt 🐬 ' + d.total),
+    (!d.gap && d.nextDate) ? el('div', { class: 'quiz-sub' }, 'Den nächsten Delfin hier kannst du ab dem ' + gLong_(d.nextDate) + ' holen.') : null,
     el('button', { class: 'primary', onclick: onNext }, 'Weiter'),
   ]));
   updateDolphinTotal(true);
@@ -1506,6 +1551,11 @@ function renderLanguageSelect() {
   ]));
   const rc0 = resumeCard();
   if (rc0) app.appendChild(rc0);
+  const waveBox = el('div', { class: 'card wave-card', id: 'waveCard', hidden: true });
+  const taskBox = el('div', { class: 'card', id: 'dailyTask', hidden: true });
+  app.appendChild(waveBox);
+  app.appendChild(taskBox);
+  fillWaveCards(waveBox, taskBox);
   const goalBox = el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:8px;' }, el('div', { class: 'goal-sub' }, '🏆 Ziele werden geladen …'));
   app.appendChild(goalBox);
   fillGoalCard(goalBox);
@@ -1622,13 +1672,18 @@ async function renderHome() {
       box.appendChild(dolSlotsEl(dolCount(cfg, idx)));
       const nd = nextDolphinDate_(dolphinMap[dolKey(cfg, idx)]);
       if (SERVER_GOALS && nd && gDay_(nd) > gDay_(todayStr())) box.appendChild(el('span', { class: 'dol-next' }, 'nächster 🐬 ab ' + gFmt_(nd).slice(0, 6)));
+      if (hasGapDolphin(cfg, idx)) box.appendChild(el('span', { class: 'dol-gap', title: 'Lückensatz-Delfin' }, '✏️🐬'));
     }
   });
   const dsum = document.getElementById('dolSummary');
   if (isCompletedBook(cfg)) {
     document.querySelectorAll('.dol-row').forEach(n => { n.style.display = 'none'; });
     if (dsum) dsum.textContent = '✅ Dieses Buch ist abgeschlossen. Delfine gibt es jetzt in ' + LANGS[cfg.key].books.filter(b => !b.completed).map(b => b.label).join(', ') + '. Die Wörter hier kommen dort als Wiederholung dran.';
-  } else if (dsum) dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion · 1-2-7-Regel)';
+  } else if (dsum) {
+    const nGap = cfg.chapters.filter((c, i) => hasGapDolphin(cfg, i)).length;
+    dsum.textContent = '🐬 ' + dolphinsInBook(cfg.key, cfg.bookKey, cfg.chapters.length) + ' von ' + (cfg.chapters.length * DOLPHIN_MAX) + ' Delfinen in ' + (cfg.bookLabel || cfg.subtitle) + ' gesammelt (max. ' + DOLPHIN_MAX + ' pro Unterlektion · 1-2-7-Regel)' +
+      (nGap ? ' · dazu ✏️🐬 ' + nGap + ' Lückensatz-' + (nGap === 1 ? 'Delfin' : 'Delfine') : '');
+  }
   cfg.chapters.forEach((c, idx) => {
     const fill = document.getElementById('mfill-' + idx);
     const label = document.getElementById('mlabel-' + idx);
@@ -1668,9 +1723,12 @@ function renderChapter(idx) {
     el('tbody', {}, chapter.words.map(w => el('tr', {}, [el('td', {}, w[cfg.foreignField]), el('td', {}, w.de)]))),
   ]);
 
+  const gapLine = el('div', { class: 'gap-prog', hidden: true });
+  if (chapterGaps(chapter).length && !isCompletedBook(cfg)) fillGapProgress(gapLine, cfg, idx);
   app.appendChild(el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:14px;' }, [
     el('h2', {}, chapter.title),
     actions,
+    gapLine,
     el('div', { style: 'overflow-x:auto;' }, table),
   ]));
 }
@@ -1791,21 +1849,51 @@ function renderWarmChoice(w) {
 // ---------- LÜCKENSÄTZE (Paket 3: Wort im Satz einsetzen – keine Delfine, zählt als Lerntag) ----------
 const GAP_ROUND = 10;
 function chapterGaps(ch) { return (ch && ch.words || []).filter(w => GAPS[w.wid]); }
+// Lückensatz-Delfin (Profi): 1 pro Lektion, wenn mind. 90 % aller Sätze der Lektion zuletzt im Profi-Modus richtig waren
+const GAP_DOLPHIN_PCT = 90;
+function gapKey(cfg, idx) { return dolKey(cfg, idx) + '_gap'; }
+function hasGapDolphin(cfg, idx) { const d = dolphinMap[gapKey(cfg, idx)]; return !!(d && d.count); }
+async function loadGapStats() {
+  await apiList(['learningDays']);   // erst prüfen, ob das Google-Skript schon Bescheid weiß
+  if (!SERVER_GAPDOL) return null;
+  return (await apiList(['gapStats'])).gapStats || {};
+}
+function gapProgress(ch, gs) {
+  const wids = chapterGaps(ch).map(w => w.wid);
+  const sure = wids.filter(w => gs && gs[w] && gs[w].ok).length;
+  return { wids, sure, total: wids.length, need: Math.ceil(GAP_DOLPHIN_PCT * wids.length / 100) };
+}
+function gapProgressText(cfg, idx, p) {
+  if (hasGapDolphin(cfg, idx)) return '✏️🐬 Lückensatz-Delfin geholt! (' + p.sure + ' von ' + p.total + ' Sätzen sicher)';
+  return '✏️ ' + p.sure + ' von ' + p.total + ' Sätzen sicher – noch ' + Math.max(0, p.need - p.sure) + ' bis zum Lückensatz-Delfin 🐬';
+}
+async function fillGapProgress(box, cfg, idx) {
+  try {
+    const gs = await loadGapStats();
+    if (!gs || !box.isConnected) return;
+    if (!Object.keys(dolphinMap).length) await loadDolphins();
+    box.textContent = gapProgressText(cfg, idx, gapProgress(cfg.chapters[idx], gs));
+    box.hidden = false;
+  } catch (e) { /* ohne Anzeige weiter */ }
+}
 function gapCorrect(val, gap) { const g = canon(normalize(val)); return !!g && acceptableAnswers(gap.a.join(';')).includes(g); }
 function chooseGapMode(idx) {
   const cfg = langCfg();
   homeBtn.hidden = false; langBtn.hidden = false;
   crumb.textContent = cfg.chapters[idx].title + ' · Lückensätze';
   app.innerHTML = '';
+  const gapLine = el('div', { class: 'gap-prog', hidden: true });
   app.appendChild(el('div', { class: 'card center-col' }, [
     el('div', { class: 'big-check' }, '✏️ Lückensätze'),
     el('div', { class: 'quiz-sub' }, 'Welches Wort fehlt im Satz? Such dir aus, wie du antworten willst:'),
     el('button', { class: 'primary', style: 'width:100%;max-width:340px;font-size:17px;padding:14px;', onclick: () => startGaps(idx, 'choice') }, '👆 Leicht – Wort antippen'),
     el('div', { class: 'quiz-sub', style: 'font-size:13px;margin-top:-6px;' }, '4 Wörter zur Auswahl · schnell, gut für zwischendurch'),
     el('button', { class: 'primary', style: 'width:100%;max-width:340px;font-size:17px;padding:14px;', onclick: () => startGaps(idx, 'type') }, '✏️ Profi – Wort selbst tippen'),
-    el('div', { class: 'quiz-sub', style: 'font-size:13px;margin-top:-6px;' }, 'Trainiert auch die Rechtschreibung · nur hier werden 🥜 Knacknüsse geknackt'),
-    el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, '📅 Beides zählt als Lerntag · keine Delfine'),
+    el('div', { class: 'quiz-sub', style: 'font-size:13px;margin-top:-6px;' }, 'Trainiert auch die Rechtschreibung · nur hier werden 🥜 Knacknüsse geknackt' + (SERVER_GAPDOL && !isCompletedBook(cfg) ? ' · ✏️🐬 1 Lückensatz-Delfin pro Lektion' : '')),
+    gapLine,
+    el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, SERVER_GAPDOL && !isCompletedBook(cfg) ? '📅 Beides zählt als Lerntag · Delfin nur im ✏️ Profi-Modus' : '📅 Beides zählt als Lerntag · keine Delfine'),
   ]));
+  if (!isCompletedBook(cfg)) fillGapProgress(gapLine, cfg, idx);
 }
 // Ablenker für "Leicht": andere Lösungen aus derselben Lektion (bei Bedarf aus Nachbar-Lektionen)
 function gapDistractors(cfg, idx, it) {
@@ -1821,13 +1909,25 @@ function gapDistractors(cfg, idx, it) {
   }
   return pool.slice(0, 3);
 }
-function startGaps(idx, mode) {
+async function startGaps(idx, mode) {
   const cfg = langCfg();
   const ch = cfg.chapters[idx];
-  const items = shuffle(chapterGaps(ch)).slice(0, GAP_ROUND).map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, chapterIdx: idx,
+  let pool = shuffle(chapterGaps(ch));
+  let withDolphin = false;
+  if (mode === 'type' && !isCompletedBook(cfg)) {   // Profi: unsichere Sätze zuerst
+    try {
+      const gs = await loadGapStats();
+      if (gs) {
+        withDolphin = true;
+        const sure = (w) => !!(gs[w.wid] && gs[w.wid].ok);
+        pool = pool.filter(w => !sure(w)).concat(pool.filter(sure));
+      }
+    } catch (e) { /* dann eben gemischt */ }
+  }
+  const items = pool.slice(0, GAP_ROUND).map(w => ({ foreign: w[cfg.foreignField], de: w.de, wid: w.wid, chapterIdx: idx,
     statsCollection: cfg.statsCollection, gap: GAPS[w.wid], quizDir: 'gap', isOld: false, srcBook: null, srcTitle: ch.title }));
   if (mode === 'choice') items.forEach(it => { it.options = shuffle([it.gap.a[0]].concat(gapDistractors(cfg, idx, it))); });
-  renderGap({ lang: cfg.key, bookIdx: currentBook, idx, title: ch.title, items, pos: 0, ok: {}, given: {}, notes: {}, mode: mode || 'type' });
+  renderGap({ lang: cfg.key, bookIdx: currentBook, idx, title: ch.title, items, pos: 0, ok: {}, given: {}, notes: {}, mode: mode || 'type', withDolphin });
 }
 // Ist das deutsche Wort fast gleich (international, normal, Roboter …)? Dann den Tipp nicht verraten.
 function gapSameAsGerman(it) {
@@ -1890,7 +1990,7 @@ function renderGap(g) {
       el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: 'width:' + Math.round(100 * g.pos / g.items.length) + '%' })),
       el('span', { style: 'font-size:12px;color:var(--ink-soft);white-space:nowrap;' }, (g.pos + 1) + ' / ' + g.items.length),
     ]),
-    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '✏️ Lückensätze · 📅 Lerntag · keine Delfine')]),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, gapPillText(g))]),
     el('div', { class: 'quiz-sub' }, 'Welches Wort fehlt? Achte auf die richtige Form.'),
     sentenceBox,
     el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, gapSameAsGerman(it) ? '🇩🇪 Tipp: Das Wort klingt fast wie auf Deutsch 😉' : '🇩🇪 Tipp: ' + it.de),
@@ -1906,8 +2006,11 @@ function gapHeader(g) {
       el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: 'width:' + Math.round(100 * g.pos / g.items.length) + '%' })),
       el('span', { style: 'font-size:12px;color:var(--ink-soft);white-space:nowrap;' }, (g.pos + 1) + ' / ' + g.items.length),
     ]),
-    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, (g.mode === 'choice' ? '👆 Leicht' : '✏️ Profi') + ' · 📅 Lerntag · keine Delfine')]),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, gapPillText(g))]),
   ];
+}
+function gapPillText(g) {
+  return (g.mode === 'choice' ? '👆 Leicht' : '✏️ Profi') + ' · 📅 Lerntag · ' + (g.withDolphin ? '✏️🐬 zählt für den Lückensatz-Delfin' : 'keine Delfine');
 }
 function renderGapChoice(g, it, sentenceBox, feedback) {
   let done = false;
@@ -1941,8 +2044,9 @@ function renderGapResult(g) {
   const nOk = g.items.filter(it => g.ok[it.wid]).length;
   app.appendChild(el('div', { class: 'card center-col' }, [
     el('div', { class: 'big-check' }, '✏️ ' + nOk + ' von ' + g.items.length + ' richtig'),
-    el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, 'Jetzt einreichen – 📅 das zählt als Lerntag (keine Delfine).' +
-      (g.mode === 'choice' ? ' Knacknüsse knackst du nur im ✏️ Profi-Modus.' : '')),
+    el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, g.withDolphin
+      ? 'Jetzt einreichen – 📅 das zählt als Lerntag, und jeder richtige Satz bringt dich näher an den ✏️🐬 Lückensatz-Delfin.'
+      : 'Jetzt einreichen – 📅 das zählt als Lerntag (keine Delfine).' + (g.mode === 'choice' ? ' Knacknüsse und Delfine gibt es nur im ✏️ Profi-Modus.' : '')),
     el('div', { style: 'width:100%;' }, g.items.map(it => el('div', { class: 'wordline' }, [
       el('div', { class: 'words' }, [
         el('span', { style: 'width:100%;' }, it.gap.s.replace('___', it.gap.a[0])),
@@ -1959,7 +2063,12 @@ function renderGapResult(g) {
 function submitGaps(g) {
   const tally = {};
   g.items.forEach(it => { tally[it.wid] = Object.assign({}, it, { results: [!!g.ok[it.wid]], inputs: [g.given[it.wid] || ''], notes: [g.notes[it.wid] || ''] }); });
-  doSubmit({ kind: 'gaps', gapMode: g.mode, noStats: g.mode === 'choice', lang: g.lang, bookIdx: g.bookIdx, chapterIdx: g.idx,
+  const cfg = cfgFor(g.lang, g.bookIdx);
+  const gapExtra = g.withDolphin ? {
+    gapResults: g.items.map(it => ({ wid: it.wid, ok: !!g.ok[it.wid] })),
+    gapDolphin: { key: gapKey(cfg, g.idx), wids: chapterGaps(cfg.chapters[g.idx]).map(w => w.wid), title: g.title },
+  } : {};
+  doSubmit({ ...gapExtra, kind: 'gaps', gapMode: g.mode, noStats: g.mode === 'choice', lang: g.lang, bookIdx: g.bookIdx, chapterIdx: g.idx,
     chapterTitle: g.title + (g.mode === 'choice' ? ' · 👆 Lückensätze (leicht)' : ' · ✏️ Lückensätze (Profi)'), attempt: 1, maxAttempts: 1,
     attemptScores: [], chapterWords: [], extraWords: [], extraStillNeeded: new Set(), tally, sentences: [], sentencesDone: true });
 }
@@ -1986,9 +2095,11 @@ function renderDictation(d) {
           el('span', { style: 'color:var(--bad);font-size:13px;width:100%;' }, 'Du hast geschrieben: „' + r.given + '“')]),
         speakBtn(r.w.foreign, d.lang),
       ]))) : null,
+      SERVER_STREAK ? el('div', { class: 'quiz-sub', style: 'font-weight:600;' }, 'Jetzt einreichen – 📅 das zählt als Lerntag für deine 🌊 Lern-Welle (keine Delfine).') : null,
       el('div', { class: 'toolbar', style: 'justify-content:center;' }, [
         el('button', { onclick: () => startDictation(d.chapterIdx) }, 'Nochmal'),
-        el('button', { class: 'primary', onclick: () => renderChapter(d.chapterIdx) }, 'Zur Lektion'),
+        SERVER_STREAK ? el('button', { class: 'primary', onclick: () => submitDictation(d) }, 'Einreichen')
+          : el('button', { class: 'primary', onclick: () => renderChapter(d.chapterIdx) }, 'Zur Lektion'),
       ]),
     ]));
     return;
@@ -2018,7 +2129,7 @@ function renderDictation(d) {
       el('div', { class: 'progress-track' }, el('div', { class: 'progress-fill', style: 'width:' + Math.round(100 * d.pos / d.words.length) + '%' })),
       el('span', { style: 'font-size:12px;color:var(--ink-soft);white-space:nowrap;' }, (d.pos + 1) + ' / ' + d.words.length),
     ]),
-    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, '🎧 Diktat – Übung, zählt nicht für deinen Delfin')]),
+    el('div', { class: 'toolbar', style: 'justify-content:center;' }, [el('span', { class: 'pill' }, SERVER_STREAK ? '🎧 Diktat · 📅 Lerntag · keine Delfine' : '🎧 Diktat – Übung, zählt nicht für deinen Delfin')]),
     el('div', { class: 'quiz-sub' }, 'Hör gut zu und schreib das ' + (d.lang === 'fr' ? 'französische' : 'englische') + ' Wort:'),
     el('button', { class: 'primary', style: 'font-size:22px;padding:14px 26px;', onclick: () => speak(w.foreign, d.lang) }, '🔊 Anhören'),
     input, pad,
@@ -2026,6 +2137,173 @@ function renderDictation(d) {
     feedback,
   ]));
   if (d.pos === 0) speak(w.foreign, d.lang);   // erstes Wort direkt abspielen (Klick auf "Diktat" zählt als Nutzer-Aktion)
+}
+
+function submitDictation(d) {
+  const cfg = cfgFor(d.lang, d.bookIdx);
+  const tally = {};
+  d.results.forEach(r => { tally[r.w.wid] = Object.assign({}, r.w, { chapterIdx: d.chapterIdx, statsCollection: cfg.statsCollection, isOld: false, srcBook: null, srcTitle: d.title,
+    results: [r.ok], inputs: [r.given], notes: [''] }); });
+  doSubmit({ kind: 'dictation', noStats: true, lang: d.lang, bookIdx: d.bookIdx, chapterIdx: d.chapterIdx, chapterTitle: d.title + ' · 🎧 Diktat',
+    attempt: 1, maxAttempts: 1, attemptScores: [], chapterWords: [], extraWords: [], extraStillNeeded: new Set(), tally, sentences: [], sentencesDone: true });
+}
+
+// ---------- LERN-WELLE & AUFGABE DES TAGES (Paket 4) ----------
+function allStatsCollections() {
+  const out = [];
+  Object.values(LANGS).forEach(l => (l.books || [l]).forEach(b => { if (out.indexOf(b.statsCollection) < 0) out.push(b.statsCollection); }));
+  return out;
+}
+async function loadStreak() {
+  const cols = allStatsCollections();
+  const data = await apiList(['learningDays'].concat(cols));
+  const ld = data.learningDays && Array.isArray(data.learningDays.list) ? data.learningDays.list : null;
+  if (!ld || !SERVER_STREAK) return null;
+  const beaten = [];
+  cols.forEach(c => Object.values(data[c] || {}).forEach(x => { if (x && x.beatenAt) beaten.push(String(x.beatenAt).slice(0, 10)); }));
+  const st = streakStatus_(ld.map(x => x.date), beaten, todayStr());
+  st.days = ld;
+  return st;
+}
+function nextMilestone(n) { return STREAK_MILESTONES.find(m => m > n) || null; }
+function waveDaysTxt(n) { return n + (n === 1 ? ' Tag' : ' Tage'); }
+function waveCardContent(st) {
+  const yesterday = gStr_(gDay_(todayStr()) - 1);
+  const nm = nextMilestone(st.current);
+  const jokers = (st.weeklyLeft || 0) + (st.extra || 0);
+  const knack = JOKER_PER_KNACK - st.nextExtraIn;
+  const info = el('div', { class: 'quiz-sub', hidden: true, style: 'text-align:left;font-size:13px;display:flex;flex-direction:column;gap:4px;' }, [
+    el('div', {}, '🌊 Jeder Tag, an dem du etwas einreichst (Abfrage, Lückensätze, Knacknüsse oder Diktat), lässt deine Welle um 1 wachsen – egal ob Englisch oder Französisch.'),
+    el('div', {}, '🛟 Wochen-Joker: Verpasst du einen Tag, springt einmal pro Woche (Mo–So) automatisch ein Joker ein. Die Welle bleibt dann stehen, wächst an dem Tag aber nicht.'),
+    el('div', {}, '🥜 Extra-Joker: Für je ' + JOKER_PER_KNACK + ' geknackte Knacknüsse bekommst du einen Extra-Joker (höchstens 1 pro Woche, du kannst bis zu ' + JOKER_STOCK_MAX + ' sammeln).'),
+    el('div', {}, '🎉 Meilensteine: ' + STREAK_MILESTONES.join(' · ') + ' Tage'),
+  ]);
+  const toggle = el('button', { class: 'small ghost', type: 'button' }, 'So funktioniert die Welle ▾');
+  toggle.addEventListener('click', () => { info.hidden = !info.hidden; toggle.textContent = info.hidden ? 'So funktioniert die Welle ▾' : 'Zuklappen ▴'; });
+  let status;
+  if (st.todayDone) status = el('div', { class: 'goal-msg green' }, '✅ Heute geschafft – deine Welle läuft weiter!');
+  else if (st.current > 0) status = el('div', { class: 'goal-msg yellow' }, '⏰ Heute noch üben, damit deine Welle weiterläuft!' + (jokers ? ' (Sonst springt ein Joker ein.)' : ''));
+  else status = el('div', { class: 'goal-msg info' }, 'Reich heute etwas ein – dann startet deine Welle! 🌊');
+  return [
+    el('div', { class: 'section-title' }, '🌊 Deine Lern-Welle'),
+    el('div', { class: 'wave-row' }, [
+      el('div', { class: 'wave-num' }, st.current > 0 ? '🌊 ' + waveDaysTxt(st.current) : '🌊 0 Tage'),
+      el('div', { class: 'wave-rec' }, '🏅 Rekord: ' + waveDaysTxt(st.record)),
+    ]),
+    status,
+    st.lastJoker === yesterday ? el('div', { class: 'goal-msg info' }, '🛟 Gestern ist ein Joker eingesprungen – deine Welle ist nicht gebrochen!') : null,
+    el('div', { class: 'wave-sub' }, '🛟 Joker: Wochen-Joker ' + (st.weeklyLeft ? 'bereit' : 'diese Woche schon benutzt') + (st.extra ? ' · ' + st.extra + ' Extra-Joker' : '')),
+    el('div', { class: 'wave-sub' }, st.extra >= JOKER_STOCK_MAX ? '🥜 Extra-Joker-Vorrat ist voll (' + JOKER_STOCK_MAX + ')' : '🥜 ' + knack + '/' + JOKER_PER_KNACK + ' Knacknüsse geknackt bis zum nächsten Extra-Joker'),
+    nm ? el('div', { class: 'wave-sub' }, '🎉 Nächster Meilenstein: ' + waveDaysTxt(nm) + ' (noch ' + (nm - st.current) + ')') : null,
+    toggle, info,
+  ];
+}
+// Zuletzt geübte Lektionen (neueste zuerst) aus dem Blatt "Ergebnisse"
+function chapterRef(row) {
+  const lang = LANGS[row.lang];
+  if (!lang) return null;
+  const title = String(row.lesson || '').split(' · ')[0];
+  let bookIdx = null, chapters = lang.chapters;
+  if (lang.books) {
+    bookIdx = lang.books.findIndex(b => b.label === row.book);
+    if (bookIdx < 0 || lang.books[bookIdx].completed) return null;
+    chapters = lang.books[bookIdx].chapters;
+  }
+  const idx = chapters.findIndex(c => c.title === title);
+  return idx < 0 ? null : { lang: row.lang, bookIdx, idx, ch: chapters[idx], title };
+}
+function recentLessons(days) {
+  const out = [], seen = new Set();
+  for (let i = days.length - 1; i >= 0; i--) {
+    const r = chapterRef(days[i]);
+    if (!r) continue;
+    const k = r.lang + '|' + r.bookIdx + '|' + r.idx;
+    if (!seen.has(k)) { seen.add(k); out.push(r); }
+  }
+  return out;
+}
+function goTo(ref) { currentLang = ref.lang; currentBook = ref.bookIdx; }
+function currentBookIdx(langKey) {
+  const l = LANGS[langKey];
+  if (!l.books) return null;
+  const i = l.books.findIndex(b => !b.completed);
+  return i < 0 ? l.books.length - 1 : i;
+}
+async function dailyTasks(st) {
+  const tasks = [];
+  // 1) Knacknüsse (ab 5 offenen)
+  if (SERVER_PROBLEMS) {
+    for (const lk of Object.keys(LANGS)) {
+      try {
+        const { open } = await loadProblemWords(lk);
+        if (open.length >= 5) tasks.push({ ico: '🥜', title: 'Knacknüsse knacken', detail: LANGS[lk].flag + ' ' + Math.min(PROBLEM_ROUND, open.length) + ' Wörter, die noch nicht ganz sitzen',
+          go: () => { currentLang = lk; currentBook = currentBookIdx(lk); startProblemQuiz(lk); } });
+      } catch (e) { /* egal */ }
+    }
+  }
+  const recent = recentLessons(st.days || []);
+  // 2) Lückensätze (leicht) zur zuletzt geübten Lektion
+  const lg = recent.find(r => chapterGaps(r.ch).length);
+  if (lg) tasks.push({ ico: '👆', title: 'Lückensätze (leicht)', detail: lg.title + ' · ' + Math.min(GAP_ROUND, chapterGaps(lg.ch).length) + ' Sätze antippen',
+    go: () => { goTo(lg); startGaps(lg.idx, 'choice'); } });
+  // 3) Unregelmäßige Verben: zuletzt geübte Verb-Gruppe, sonst die erste
+  const en = LANGS.en;
+  const vb = recent.find(r => isVerbChapter(r.ch)) || (() => {
+    const bi = currentBookIdx('en'); const chs = bi != null ? en.books[bi].chapters : en.chapters;
+    const i = chs.findIndex(isVerbChapter);
+    return i < 0 ? null : { lang: 'en', bookIdx: bi, idx: i, ch: chs[i], title: chs[i].title };
+  })();
+  if (vb) tasks.push({ ico: '🔤', title: 'Unregelmäßige Verben', detail: vb.title + ' · ' + vb.ch.words.length + ' Verben', go: () => { goTo(vb); startLesson(vb.idx); } });
+  // 4) Diktat zur zuletzt geübten Lektion
+  const ld = CAN_SPEAK ? recent.find(r => !isVerbChapter(r.ch)) : null;
+  if (ld) tasks.push({ ico: '🎧', title: 'Diktat', detail: ld.title + ' · hören und schreiben', go: () => { goTo(ld); startDictation(ld.idx); } });
+  return tasks;
+}
+let dailyTaskPick = 0;
+function renderTaskCard(box, st, tasks) {
+  box.innerHTML = '';
+  if (!tasks.length) { box.hidden = true; return; }
+  const t = tasks[dailyTaskPick % tasks.length];
+  box.appendChild(el('div', { class: 'section-title' }, '⭐ Aufgabe des Tages' + (st.todayDone ? ' · ✅ erledigt' : '')));
+  if (st.todayDone) box.appendChild(el('div', { class: 'goal-msg green' }, 'Du hast heute schon geübt – super! Lust auf mehr?'));
+  box.appendChild(el('div', { class: 'task-row' }, [
+    el('div', { class: 'task-ico' }, t.ico),
+    el('div', {}, [el('div', { style: 'font-weight:700;' }, t.title), el('div', { class: 'wave-sub' }, t.detail + ' · ca. 5–10 Minuten')]),
+  ]));
+  box.appendChild(el('div', { class: 'toolbar' }, [
+    el('button', { class: st.todayDone ? '' : 'primary', onclick: t.go }, st.todayDone ? 'Trotzdem machen' : 'Los geht\'s'),
+    tasks.length > 1 ? el('button', { class: 'ghost', onclick: () => { dailyTaskPick++; renderTaskCard(box, st, tasks); } }, '🔄 Was anderes') : null,
+  ]));
+  box.hidden = false;
+}
+async function fillWaveCards(waveBox, taskBox) {
+  try {
+    const st = await loadStreak();
+    if (!st || !waveBox.isConnected) { waveBox.remove(); taskBox.remove(); return; }
+    waveBox.innerHTML = '';
+    waveCardContent(st).filter(Boolean).forEach(x => waveBox.appendChild(x));
+    waveBox.hidden = false;
+    renderTaskCard(taskBox, st, await dailyTasks(st));
+  } catch (e) { waveBox.remove(); taskBox.remove(); }
+}
+function renderStreakCongrats(session, st, onNext) {
+  homeBtn.hidden = true; langBtn.hidden = true;
+  crumb.textContent = session.chapterTitle + ' · Meilenstein!';
+  app.innerHTML = '';
+  const nm = nextMilestone(st.current);
+  app.appendChild(el('div', { class: 'card center-col dol-card' }, [
+    el('div', { class: 'dol-stage' }, [
+      el('span', { class: 'dol-spark', style: 'left:12%;top:10px;' }, '🎉'),
+      el('span', { class: 'dol-spark', style: 'right:12%;top:18px;animation-delay:.6s;' }, '🎉'),
+      el('div', { class: 'star-pop', style: 'font-size:64px;' }, '🌊'),
+      el('div', { class: 'dol-waves' }, '🌊🌊🌊🌊🌊🌊🌊🌊'),
+    ]),
+    el('div', { class: 'big-check' }, st.milestone + ' Tage Lern-Welle!'),
+    el('div', { class: 'quiz-sub' }, 'Wow, ' + NEPHEW_NICK + ' – du hast ' + st.milestone + ' Tage hintereinander geübt. Deine Welle rollt! 🏄'),
+    nm ? el('div', { class: 'quiz-sub' }, 'Nächster Meilenstein: ' + nm + ' Tage') : el('div', { class: 'quiz-sub' }, 'Du bist ein echter Lern-Surfer! 🏆'),
+    el('button', { class: 'primary', onclick: onNext }, 'Weiter'),
+  ]));
+  window.scrollTo(0, 0);
 }
 
 // ---------- QUIZ ----------
@@ -2653,7 +2931,7 @@ async function doSubmit(session) {
   const wordsWithResults = Object.values(session.tally).filter(w => w.results.length > 0);
   const classified = wordsWithResults.map(w => ({ ...w, ...classifyWord(w.results) }));
   const sc = dolphinScores(session);
-  const isProblems = session.kind === 'problems' || session.kind === 'gaps';   // keine Delfine
+  const isProblems = session.kind === 'problems' || session.kind === 'gaps' || session.kind === 'dictation';   // keine normalen Delfine
   const completed = isCompletedBook(cfg);
   const key = (completed || isProblems) ? null : dolKey(cfg, session.chapterIdx);
 
@@ -2690,6 +2968,8 @@ async function doSubmit(session) {
     dolphinClaim: !!(key && sc.ok),
     bookKey: cfg.bookKey || null,
     chapterIdx: session.chapterIdx,
+    gapResults: session.gapResults || undefined,
+    gapDolphin: session.gapDolphin || undefined,
   };
   saveProgress('submit', session, { payload, classified });
   sendSubmission(cfg, session, classified, payload);
@@ -2719,9 +2999,11 @@ async function sendSubmission(cfg, session, classified, payload) {
   apiInvalidate();
   if (res.dolphinKey && res.dolphinDoc) dolphinMap[res.dolphinKey] = res.dolphinDoc;
   const d = Object.assign({}, payload.submission.dolphin, res.dolphin || {});
-  const showSubmitted = () => renderSubmitted(cfg, classified, null, d);
+  const streak = res.streak || null;
+  const showSubmitted = () => renderSubmitted(cfg, classified, null, d, streak);
+  const afterBeaten = (streak && streak.milestone) ? () => renderStreakCongrats(session, streak, showSubmitted) : showSubmitted;
   const beaten = Array.isArray(res.beaten) ? res.beaten : [];
-  const afterDolphin = beaten.length ? () => renderBeatenCongrats(session, beaten, res.beatenTotal, showSubmitted) : showSubmitted;
+  const afterDolphin = beaten.length ? () => renderBeatenCongrats(session, beaten, res.beatenTotal, afterBeaten) : afterBeaten;
   if (d.earned) renderDolphinCongrats(cfg, session, d, afterDolphin);
   else { updateDolphinTotal(); afterDolphin(); }
 }
@@ -2743,7 +3025,10 @@ function renderSubmitFailed(cfg, session, classified, payload, msg) {
 function dolphinNote(d) {
   if (!d) return null;
   let t = null;
-  if (d.earned) t = '🐬 Neuer Delfin verdient! (' + d.chapterCount + ' von ' + DOLPHIN_MAX + ' für diese Unterlektion · insgesamt ' + d.total + ')';
+  if (d.gap && d.earned) t = '✏️🐬 Lückensatz-Delfin verdient! (insgesamt 🐬 ' + d.total + ')';
+  else if (d.reason === 'gapprogress') t = '✏️ ' + d.gapSure + ' von ' + d.gapTotal + ' Sätzen sicher – noch ' + Math.max(0, d.gapNeed - d.gapSure) + ' bis zum Lückensatz-Delfin 🐬';
+  else if (d.reason === 'gapdone') t = '✏️🐬 Den Lückensatz-Delfin für diese Lektion hast du schon – stark!';
+  else if (d.earned) t = '🐬 Neuer Delfin verdient! (' + d.chapterCount + ' von ' + DOLPHIN_MAX + ' für diese Unterlektion · insgesamt ' + d.total + ')';
   else if (d.reason === 'wait') t = '🐬 Super gemacht! Den nächsten Delfin für diese Unterlektion kannst du ab dem ' + gLong_(d.nextDate) + ' holen – so bleiben die Wörter richtig lange im Kopf.';
   else if (d.reason === 'today') t = '🐬 Für diese Unterlektion hast du heute schon ' + DOLPHIN_PER_DAY + ' Delfine geholt. Morgen geht es weiter!';
   else if (d.reason === 'max') t = '🏆 Du hast schon alle ' + DOLPHIN_MAX + ' Delfine für diese Unterlektion – stark!';
@@ -2751,7 +3036,7 @@ function dolphinNote(d) {
   return t ? el('div', { class: 'dol-note' }, t) : null;
 }
 
-function renderSubmitted(cfg, classified, saveError, dolphin) {
+function renderSubmitted(cfg, classified, saveError, dolphin, streak) {
   app.innerHTML = '';
   const needsPractice = classified.filter(w => w.level !== 'good');
 
@@ -2768,6 +3053,7 @@ function renderSubmitted(cfg, classified, saveError, dolphin) {
     el('div', { class: 'big-check' }, '🎉 Geschafft, ' + NEPHEW_NICK + '!'),
     el('div', { class: 'quiz-sub' }, 'Deine Eltern bekommen eine Zusammenfassung.'),
     dolphinNote(dolphin),
+    streak ? el('div', { class: 'dol-note' }, '🌊 Lern-Welle: ' + waveDaysTxt(streak.current) + (streak.current >= streak.record && streak.current > 1 ? ' – neuer Rekord! 🏅' : ' – weiter so!')) : null,
     saveError ? el('div', { class: 'feedback bad' }, saveError) : null,
     el('button', { class: 'primary', onclick: () => renderHome() }, 'Zurück zur ' + cfg.chapterNoun + 'übersicht'),
   ]));
